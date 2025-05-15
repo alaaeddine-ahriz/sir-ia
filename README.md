@@ -1,113 +1,119 @@
-# Assistant pédagogique RAG
+# Le Rhino - Système RAG pour la gestion de cours
 
-Un assistant pédagogique IA basé sur la génération augmentée par recherche (RAG) pour gérer, interroger et générer des questions à partir de documents de cours.
+Le Rhino est une application web basée sur un système RAG (Retrieval-Augmented Generation) permettant de gérer des documents de cours par matière et de générer des questions de réflexion intelligentes.
 
 ## Fonctionnalités
 
-- **Gestion de documents de cours** par matière
-- **Prise en charge multi-format** : PDF, DOCX, PPTX, TXT, MD, ODT, ODP et DOC
-- **Recherche sémantique** dans les documents de cours
-- **Génération de questions de réflexion** sur des concepts spécifiques
-- **Interrogation assistée par IA** du contenu des cours
-- **Mise à jour intelligente** des documents (ajout, modification, suppression)
-- **Traitement intelligent des documents non structurés**
-
-## Prérequis
-
-- Python 3.8 ou supérieur
-- Compte Pinecone (pour la base de données vectorielle)
-- Compte OpenAI (pour l'IA générative)
+- **Interface web** pour une utilisation intuitive
+- **Gestion des matières** avec affichage des logs de mise à jour
+- **Génération de questions** sur les concepts des cours
+- **Interrogation contextuelle** basée sur le contenu des cours
+- **Réponses en format texte ou JSON** avec attribution des sources
 
 ## Installation
 
+### Prérequis
+
+- Python 3.8+
+- Compte Pinecone pour la base de données vectorielle
+- Clé API OpenAI
+
+### Configuration
+
 1. Clonez ce dépôt :
 ```bash
-git clone [URL du dépôt]
+git clone https://github.com/alaaeddine-ahriz/sir-ia.git
 cd rag-chatbot
 ```
 
-2. Installez les dépendances :
-```bash
-pip install -r requirements.txt
+2. Créez un fichier `.env` à la racine du projet avec les informations suivantes :
 ```
-
-Pour la prise en charge complète des fichiers DOC (ancien format Word), vous pourriez avoir besoin d'installer des dépendances supplémentaires selon votre système :
-
-- **Linux** :
-```bash
-sudo apt-get install antiword poppler-utils tesseract-ocr
-```
-
-- **macOS** :
-```bash
-brew install antiword poppler tesseract
-```
-
-3. Créez un fichier `.env` à la racine du projet avec les variables suivantes :
-```
-OPENAI_API_KEY=votre_clé_api_openai
 PINECONE_API_KEY=votre_clé_api_pinecone
+OPENAI_API_KEY=votre_clé_api_openai
 PINECONE_CLOUD=aws
 PINECONE_REGION=us-east-1
 ```
 
+3. Exécutez le script d'installation :
+```bash
+chmod +x run.sh
+./run.sh
+```
+
 ## Utilisation
 
-Lancez l'application :
-```bash
-python main.py
-```
+Après avoir lancé l'application, accédez à l'interface web à l'adresse http://localhost:8000.
 
-### Menu principal
+### Organisation des fichiers de cours
 
-L'assistant propose 4 options principales :
-
-1. **Mettre à jour les documents d'une matière** - Indexe les nouveaux documents, met à jour les documents modifiés et supprime les documents disparus
-2. **Générer une question de réflexion** - Crée une question de réflexion sur un concept spécifique
-3. **Poser une question sur une matière** - Interroge la base de connaissances sur un sujet précis
-4. **Quitter** - Termine l'application
-
-### Organisation des documents
-
-Les documents de cours doivent être organisés selon la structure suivante :
+Les documents de cours doivent être placés dans le dossier `cours/` organisé par matières :
 ```
 cours/
-  ├── SYD/                     # Dossier de la matière
-  │   ├── document1.md         # Document markdown
-  │   ├── presentation.pptx    # Présentation PowerPoint
-  │   ├── cours.pdf            # Document PDF
-  │   ├── notes.docx           # Document Word
-  │   └── ...
-  └── [AUTRE_MATIERE]/         # Autre matière
-      └── ...
+  ├── SYD/
+  │    ├── document1.md
+  │    ├── document2.pdf
+  │    └── ...
+  ├── TCP/
+  │    ├── document1.md
+  │    └── ...
+  └── ...
 ```
 
-### Formats pris en charge
+Formats supportés : `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.odt`, `.odp`
 
-- **Markdown (.md)** - Format recommandé pour une structure optimale
-- **PDF (.pdf)** - Texte extrait avec conservation de paragraphes
-- **Word (.docx)** - Inclut la détection intelligente des titres
-- **PowerPoint (.pptx)** - Chaque diapositive est convertie en section
-- **OpenDocument (.odt, .odp)** - Formats LibreOffice/OpenOffice
-- **Texte brut (.txt)** - Traité avec découpage par paragraphes
-- **Word ancien format (.doc)** - Pris en charge via la bibliothèque textract
+### Interface web
+
+L'interface web propose trois onglets principaux :
+
+1. **Matières** :
+   - Affichage de la liste des matières disponibles
+   - Mise à jour de l'index vectoriel avec affichage des logs détaillés
+   
+2. **Poser une question** :
+   - Interrogation contextuelle sur une matière
+   - Affichage des sources utilisées pour la réponse
+   
+3. **Générer une question de réflexion** :
+   - Création de questions de réflexion sur un concept spécifique
+   - Options pour générer des questions de différents niveaux
+
+## API REST
+
+Le système expose également une API REST pour une intégration programmatique :
+
+### Points d'accès principaux
+
+- `GET /matieres` : Liste des matières disponibles
+- `POST /matieres/update` : Mise à jour de l'index d'une matière (avec logs)
+- `POST /question` : Interrogation d'une matière
+- `POST /question/reflection` : Génération d'une question de réflexion
+
+### Exemple d'utilisation avec curl
+
+```bash
+# Lister les matières
+curl -X GET http://localhost:8000/matieres
+
+# Mettre à jour une matière
+curl -X POST http://localhost:8000/matieres/update \
+  -H "Content-Type: application/json" \
+  -d '{"matiere": "SYD"}'
+
+# Poser une question
+curl -X POST http://localhost:8000/question \
+  -H "Content-Type: application/json" \
+  -d '{"matiere": "SYD", "query": "Expliquez le concept de la virtualisation", "output_format": "text"}'
+```
+
+Pour plus de détails sur l'API, consultez la documentation interactive à l'adresse http://localhost:8000/docs.
 
 ## Fonctionnement technique
 
-1. Le système extrait le contenu des documents selon leur format
-2. Le texte est traité et divisé en sections, en détectant les titres quand c'est possible ou en utilisant des heuristiques de découpage pour les documents non structurés
-3. Ces sections sont converties en vecteurs (embeddings) et stockées dans Pinecone
-4. Lors d'une requête, le système :
-   - Recherche les sections les plus pertinentes
-   - Les combine avec la question pour former un prompt contextualisé
-   - Génère une réponse avec le modèle GPT d'OpenAI
+1. **Importation des documents** : Lors de la mise à jour d'une matière, les documents sont lus et transformés en chunks.
+2. **Vectorisation** : Chaque chunk est converti en vecteur et stocké dans Pinecone.
+3. **Requête** : Lorsqu'une question est posée, le système recherche les documents les plus pertinents.
+4. **Génération** : Un LLM (via OpenAI) génère une réponse à partir des documents retrouvés.
 
-## Maintenance
+## License
 
-- Le fichier `metadata_cours.json` conserve l'historique des documents indexés
-- Le système détecte automatiquement les modifications et suppressions
-- Seuls les nouveaux documents ou les documents modifiés sont traités lors des mises à jour
-
-## Personnalisation
-
-Vous pouvez ajouter de nouvelles matières en créant un dossier correspondant dans `cours/` et en y ajoutant des documents dans n'importe quel format pris en charge. 
+Ce projet est réalisé dans un cadre académique. Il n’est pas destiné à une diffusion publique ni à une réutilisation sans autorisation.

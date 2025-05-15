@@ -973,7 +973,7 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         TEMPLATE_TUTEUR_JSON = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une question de réflexion de niveau avancé sur le concept demandé, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une question de réflexion de niveau débutant sur le concept demandé, en vous basant strictement sur les extraits suivants:
 
         {context}
 
@@ -1012,7 +1012,7 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         TEMPLATE_TUTEUR = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une seule question de réflexion de niveau avancé, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une seule question de réflexion de niveau débutant, en vous basant strictement sur les extraits suivants:
 
         {context}
 
