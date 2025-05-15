@@ -66,9 +66,12 @@ from langchain.schema import Document
 # Chemin vers le dossier des cours
 COURS_DIR = os.path.join(os.getcwd(), "cours")
 # Nom de l'index Pinecone
-INDEX_NAME = "rag-education"
+INDEX_NAME = "rag-sir"
 # Fichier de suivi des mises à jour
 METADATA_FILE = os.path.join(os.getcwd(), "metadata_cours.json")
+
+# Dossier pour les sorties JSON
+OUTPUTS_DIR = os.path.join(os.getcwd(), "outputs")
 
 # -----------------------------------------
 # Fonctions de gestion des fichiers
@@ -320,6 +323,65 @@ def sauvegarder_metadata(metadata):
             json.dump(metadata, f, indent=2)
     except Exception as e:
         print(f"Erreur lors de la sauvegarde des métadonnées: {e}")
+
+# -----------------------------------------
+# Fonctions de gestion des fichiers de sortie
+# -----------------------------------------
+def creer_dossier_sortie():
+    """
+    Crée un dossier horodaté pour les sorties JSON.
+    
+    Returns:
+        str: Chemin vers le dossier créé
+    """
+    # Créer le dossier principal de sorties s'il n'existe pas
+    if not os.path.exists(OUTPUTS_DIR):
+        os.makedirs(OUTPUTS_DIR)
+    
+    # Créer un sous-dossier horodaté
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(OUTPUTS_DIR, f"outputs_{timestamp}")
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Dossier de sortie créé: {output_dir}")
+    
+    return output_dir
+
+def sauvegarder_json(json_data, prefix, matiere, output_dir=None):
+    """
+    Sauvegarde un objet JSON dans un fichier horodaté.
+    
+    Args:
+        json_data (str ou dict): Données JSON à sauvegarder
+        prefix (str): Préfixe pour le nom du fichier
+        matiere (str): Identifiant de la matière
+        output_dir (str, optional): Dossier de sortie. Si None, utilise le dossier par défaut.
+        
+    Returns:
+        str: Chemin vers le fichier créé
+    """
+    # Créer le dossier de sortie si nécessaire
+    if output_dir is None:
+        output_dir = creer_dossier_sortie()
+    
+    # Générer un nom de fichier unique
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"{prefix}_{matiere}_{timestamp}.json"
+    filepath = os.path.join(output_dir, filename)
+    
+    # Convertir en chaîne JSON si nécessaire
+    if isinstance(json_data, dict):
+        json_str = json.dumps(json_data, ensure_ascii=False, indent=2)
+    else:
+        json_str = json_data
+    
+    # Écrire le fichier
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(json_str)
+    
+    print(f"Résultat JSON sauvegardé: {filepath}")
+    return filepath
 
 # -----------------------------------------
 # Fonctions de traitement du texte
@@ -781,7 +843,7 @@ def mettre_a_jour_matiere(pc, index_name, embeddings, matiere):
 # -----------------------------------------
 # Configuration du système RAG
 # -----------------------------------------
-def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None):
+def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None, output_format="text"):
     """
     Configure le système RAG pour une matière spécifique.
     
@@ -790,6 +852,7 @@ def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None):
         embeddings: Modèle d'embedding
         matiere (str): Identifiant de la matière
         custom_prompt: Prompt personnalisé facultatif
+        output_format (str): Format de sortie ("text" ou "json")
         
     Returns:
         object: Chaîne de récupération configurée
@@ -806,6 +869,8 @@ def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None):
     # Configurer le prompt de question-réponse
     if custom_prompt:
         retrieval_qa_chat_prompt = custom_prompt
+    elif output_format == "json":
+        retrieval_qa_chat_prompt = creer_prompt_json(matiere)
     else:
         retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
     
@@ -827,45 +892,124 @@ def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None):
     
     return retrieval_chain
 
-def creer_prompt_tuteur(matiere):
+def creer_prompt_json(matiere):
     """
-    Crée un prompt personnalisé pour le tuteur d'une matière spécifique.
+    Crée un prompt personnalisé pour générer des réponses au format JSON sans les sources.
+    Les sources seront ajoutées programmatiquement à partir des documents réels.
     
     Args:
         matiere (str): Identifiant de la matière
     
     Returns:
-        ChatPromptTemplate: Template de prompt pour le tuteur
+        ChatPromptTemplate: Template de prompt pour générer du JSON
     """
-    TEMPLATE_TUTEUR = """
-    Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
+    TEMPLATE_JSON = """
+    Vous êtes un assistant pédagogique IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-    Votre tâche est de générer une seule question de réflexion de niveau avancé, en vous basant strictement sur les extraits suivants:
-
+    Sur la base des extraits de cours suivants:
     {context}
-
-    La question doit :
-    1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
-    2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
-    3. Favoriser une réponse argumentée plutôt qu'une simple définition.
-
-    # Instructions
-
-    - N'utilisez que les passages extraits des documents de cours ci-dessus.
-    - Ne proposez qu'une question ouverte et directe en une ligne.
-    - N'ajoutez ni explication ni sous-questions.
-    - Les questions ne doivent pas demander d'analyse.
-    - Référez-vous strictement aux extraits listés.
-
-    Votre question: 
+    
+    Répondez à cette question: {input}
+    
+    Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
+    
+    ```json
+    {{
+        "réponse": "La réponse complète à la question",
+        "concepts_clés": ["concept1", "concept2", "concept3"],
+        "niveau_confiance": 0.95
+    }}
+    ```
+    
+    IMPORTANT:
+    - Ne mentionnez pas et n'ajoutez pas de sources dans votre réponse
+    - Concentrez-vous uniquement sur la réponse et les concepts clés
+    - N'incluez aucun autre champ que ceux spécifiés ci-dessus
+    
+    Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
     """
     
-    return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR).partial(matiere=matiere)
+    return ChatPromptTemplate.from_template(TEMPLATE_JSON).partial(matiere=matiere)
+
+def creer_prompt_tuteur(matiere, output_format="text"):
+    """
+    Crée un prompt personnalisé pour le tuteur d'une matière spécifique.
+    
+    Args:
+        matiere (str): Identifiant de la matière
+        output_format (str): Format de sortie ("text" ou "json")
+    
+    Returns:
+        ChatPromptTemplate: Template de prompt pour le tuteur
+    """
+    if output_format == "json":
+        TEMPLATE_TUTEUR_JSON = """
+        Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
+
+        Votre tâche est de générer une question de réflexion de niveau avancé sur le concept demandé, en vous basant strictement sur les extraits suivants:
+
+        {context}
+
+        La question doit :
+        1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
+        2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
+        3. Favoriser une réponse argumentée plutôt qu'une simple définition.
+
+        Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
+
+        ```json
+        {{
+            "question": "La question de réflexion complète",
+            "concepts_abordés": ["concept1", "concept2", "concept3"],
+            "niveau_difficulté": "avancé", // "débutant", "intermédiaire" ou "avancé"
+            "compétences_visées": ["analyse critique", "synthèse", "application pratique"],
+            "éléments_réponse": [
+                "Élément 1 attendu dans la réponse",
+                "Élément 2 attendu dans la réponse",
+                "Élément 3 attendu dans la réponse"
+            ]
+        }}
+        ```
+
+        IMPORTANT:
+        - Ne mentionnez pas et n'ajoutez pas de sources dans votre réponse
+        - Concentrez-vous uniquement sur la question et les éléments associés
+        - N'incluez aucun autre champ que ceux spécifiés ci-dessus
+        - Les "éléments_réponse" doivent être des points clés qu'un étudiant devrait aborder dans sa réponse
+        - Basez ces éléments uniquement sur le contenu des documents sources fournis
+
+        Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
+        """
+        return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR_JSON).partial(matiere=matiere)
+    else:
+        TEMPLATE_TUTEUR = """
+        Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
+
+        Votre tâche est de générer une seule question de réflexion de niveau avancé, en vous basant strictement sur les extraits suivants:
+
+        {context}
+
+        La question doit :
+        1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
+        2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
+        3. Favoriser une réponse argumentée plutôt qu'une simple définition.
+
+        # Instructions
+
+        - N'utilisez que les passages extraits des documents de cours ci-dessus.
+        - Ne proposez qu'une question ouverte et directe en une ligne.
+        - N'ajoutez ni explication ni sous-questions.
+        - Les questions ne doivent pas demander d'analyse.
+        - Référez-vous strictement aux extraits listés.
+
+        Votre question: 
+        """
+        return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR).partial(matiere=matiere)
 
 # -----------------------------------------
 # Fonctions d'interrogation
 # -----------------------------------------
-def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=None):
+def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=None, output_format="text", save_output=True):
     """
     Interroge spécifiquement les documents d'une matière.
     
@@ -875,20 +1019,117 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
         matiere (str): Identifiant de la matière
         query (str): Question de l'utilisateur
         custom_prompt: Prompt personnalisé facultatif
+        output_format (str): Format de sortie ("text" ou "json")
+        save_output (bool): Indique si la sortie JSON doit être sauvegardée
         
     Returns:
         dict: Réponse du système RAG
     """
     # Configurer le système RAG
-    retrieval_chain = setup_rag_system(index_name, embeddings, matiere, custom_prompt)
+    retrieval_chain = setup_rag_system(index_name, embeddings, matiere, custom_prompt, output_format)
     
     print(f"\n\n--- Requête pour {matiere}: '{query}' ---")
     
     # Exécuter la requête
     response = retrieval_chain.invoke({"input": query})
     
-    # Afficher la réponse
-    print(f"\nRéponse: {response['answer']}")
+    # Dossier de sortie pour la session
+    output_dir = None
+    if save_output and output_format == "json":
+        output_dir = creer_dossier_sortie()
+    
+    # Si format JSON demandé, ajouter les sources aux résultats
+    if output_format == "json":
+        try:
+            import json
+            import re
+            
+            # Extraire le JSON de la réponse (qui peut contenir d'autres textes)
+            json_answer = response['answer']
+            
+            # Rechercher le JSON entre les délimiteurs ```json et ```
+            json_pattern = r"```(?:json)?(.*?)```"
+            match = re.search(json_pattern, json_answer, re.DOTALL)
+            
+            if match:
+                # Extraire le contenu JSON
+                json_str = match.group(1).strip()
+                response_json = json.loads(json_str)
+            else:
+                # Essayer de charger directement la réponse comme JSON
+                # Nettoyer la réponse si nécessaire (retirer les caractères non-JSON)
+                json_str = json_answer.strip()
+                response_json = json.loads(json_str)
+            
+            # Créer la section sources à partir des documents réellement utilisés
+            sources = []
+            for i, doc in enumerate(response["context"]):
+                source_entry = {
+                    "document": i + 1,
+                    "source": doc.metadata.get('source', 'Source inconnue')
+                }
+                
+                # Ajouter la section si elle existe
+                if "Header 2" in doc.metadata:
+                    source_entry["section"] = doc.metadata["Header 2"]
+                elif "Header 3" in doc.metadata:
+                    source_entry["section"] = doc.metadata["Header 3"]
+                
+                # Limiter le contenu pour éviter des extraits trop longs
+                max_content_length = 250  # Caractères
+                content = doc.page_content
+                if len(content) > max_content_length:
+                    content = content[:max_content_length] + "..."
+                
+                source_entry["contenu"] = content
+                sources.append(source_entry)
+            
+            # Ajouter les sources à la réponse JSON
+            response_json["sources"] = sources
+            
+            # Ajouter la requête originale et des métadonnées
+            response_json["requête_originale"] = query
+            response_json["matière"] = matiere
+            response_json["date_génération"] = datetime.now().isoformat()
+            
+            # Mettre à jour la réponse
+            formatted_json = json.dumps(response_json, ensure_ascii=False, indent=2)
+            
+            # Stocker le JSON complet dans la réponse
+            response['answer'] = formatted_json
+            
+            # Sauvegarder le résultat si demandé
+            if save_output:
+                prefix = "reponse"
+                sauvegarder_json(formatted_json, prefix, matiere, output_dir)
+            
+            print("\nRéponse (format JSON):")
+            print(formatted_json)
+        except Exception as e:
+            print(f"Erreur lors de l'ajout des sources à la réponse JSON: {e}")
+            print(f"Contenu de la réponse: {response['answer'][:100]}...")
+            
+            # On va quand même essayer de conserver la réponse JSON originale
+            import re
+            json_pattern = r"```(?:json)?(.*?)```"
+            match = re.search(json_pattern, response['answer'], re.DOTALL)
+            if match:
+                json_str = match.group(1).strip()
+                print("\nRéponse (format JSON - sans sources ajoutées):")
+                print(f"```json\n{json_str}\n```")
+                
+                # Sauvegarder quand même si demandé
+                if save_output:
+                    try:
+                        prefix = "reponse_partielle"
+                        sauvegarder_json(json_str, prefix, matiere, output_dir)
+                    except Exception as save_error:
+                        print(f"Erreur lors de la sauvegarde du JSON: {save_error}")
+            else:
+                print("\nRéponse (format JSON - sans sources ajoutées):")
+                print(response['answer'])
+    else:
+        print(f"\nRéponse: {response['answer']}")
     
     # Afficher les documents sources
     print("\nDocuments sources:")
@@ -907,7 +1148,7 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
     
     return response
 
-def generer_question_reflexion(index_name, embeddings, matiere, concept_cle):
+def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, output_format="text", save_output=True):
     """
     Génère une question de réflexion sur un concept clé dans une matière spécifique.
     
@@ -916,12 +1157,14 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle):
         embeddings: Modèle d'embedding
         matiere (str): Identifiant de la matière (ex: "SYD", "BD")
         concept_cle (str): Concept sur lequel générer une question
+        output_format (str): Format de sortie ("text" ou "json")
+        save_output (bool): Indique si la sortie JSON doit être sauvegardée
         
     Returns:
         str: Question de réflexion générée
     """
     # Créer le prompt tuteur pour cette matière
-    tuteur_prompt = creer_prompt_tuteur(matiere)
+    tuteur_prompt = creer_prompt_tuteur(matiere, output_format)
     
     # Interroger la matière avec ce prompt
     result = interroger_matiere(
@@ -929,7 +1172,9 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle):
         embeddings=embeddings,
         matiere=matiere, 
         query=f"Générer une question de réflexion sur le concept: {concept_cle}",
-        custom_prompt=tuteur_prompt
+        custom_prompt=tuteur_prompt,
+        output_format=output_format,
+        save_output=save_output
     )
     
     return result["answer"]
@@ -988,11 +1233,13 @@ def main():
     while True:
         print("\nQue souhaitez-vous faire?")
         print("1. Mettre à jour les documents d'une matière")
-        print("2. Générer une question de réflexion")
-        print("3. Poser une question sur une matière")
-        print("4. Quitter")
+        print("2. Générer une question de réflexion (texte)")
+        print("3. Générer une question de réflexion (JSON)")
+        print("4. Poser une question sur une matière")
+        print("5. Poser une question (réponse JSON)")
+        print("6. Quitter")
         
-        choix = input("Votre choix (1-4): ")
+        choix = input("Votre choix (1-6): ")
         
         if choix == "1":
             # Mettre à jour une matière
@@ -1008,7 +1255,7 @@ def main():
             mettre_a_jour_matiere(pc, index_name, embeddings, matiere)
             
         elif choix == "2":
-            # Générer une question de réflexion
+            # Générer une question de réflexion (texte)
             if not matieres:
                 print("Aucune matière disponible.")
                 continue
@@ -1021,12 +1268,31 @@ def main():
             concept = input("Entrez le concept sur lequel générer une question: ")
             
             try:
-                question = generer_question_reflexion(index_name, embeddings, matiere, concept)
+                question = generer_question_reflexion(index_name, embeddings, matiere, concept, "text", save_output=False)
                 print(f"\nQuestion générée: {question}")
             except Exception as e:
                 print(f"Erreur lors de la génération de la question: {e}")
-            
+                
         elif choix == "3":
+            # Générer une question de réflexion (JSON)
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            concept = input("Entrez le concept sur lequel générer une question: ")
+            
+            try:
+                question_json = generer_question_reflexion(index_name, embeddings, matiere, concept, "json", save_output=True)
+                print(f"\nQuestion JSON générée et sauvegardée.\n{question_json}")
+            except Exception as e:
+                print(f"Erreur lors de la génération de la question JSON: {e}")
+            
+        elif choix == "4":
             # Poser une question
             if not matieres:
                 print("Aucune matière disponible.")
@@ -1040,17 +1306,35 @@ def main():
             question = input("Entrez votre question: ")
             
             try:
-                interroger_matiere(index_name, embeddings, matiere, question)
+                interroger_matiere(index_name, embeddings, matiere, question, save_output=False)
+            except Exception as e:
+                print(f"Erreur lors de la recherche: {e}")
+                
+        elif choix == "5":
+            # Poser une question avec réponse JSON
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            question = input("Entrez votre question: ")
+            
+            try:
+                interroger_matiere(index_name, embeddings, matiere, question, output_format="json", save_output=True)
             except Exception as e:
                 print(f"Erreur lors de la recherche: {e}")
             
-        elif choix == "4":
+        elif choix == "6":
             # Quitter
             print("Au revoir!")
             break
             
         else:
-            print("Choix non valide. Veuillez entrer un nombre entre 1 et 4.")
+            print("Choix non valide. Veuillez entrer un nombre entre 1 et 6.")
 
 if __name__ == "__main__":
     main() 

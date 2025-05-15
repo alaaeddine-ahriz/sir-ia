@@ -59,3 +59,7 @@ docs/_build/
 .Trashes
 ehthumbs.db
 Thumbs.db 
+
+# Outputs
+outputs/
+metadata_cours.json 
