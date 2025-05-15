@@ -22,6 +22,16 @@ from dotenv import load_dotenv
 # Chargement des variables d'environnement
 load_dotenv()
 
+# Essai d'import de PyPDF2 au démarrage
+PYPDF2_AVAILABLE = False
+try:
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
+    print(f"PyPDF2 importé avec succès! Version: {PyPDF2.__version__}")
+except ImportError as e:
+    print(f"AVERTISSEMENT: PyPDF2 n'est pas disponible: {e}")
+    print("L'extraction de texte PDF sera limitée.")
+
 # Désactivation des avertissements LangSmith
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_TRACING"] = "false"
@@ -43,7 +53,7 @@ try:
     from odf.teletype import extractText
 except ImportError:
     print("Avertissement: Certaines bibliothèques de traitement de documents ne sont pas installées.")
-    print("Exécutez 'pip install pdfplumber python-docx python-pptx odfpy' pour une prise en charge complète.")
+    print("Exécutez 'pip install pdfplumber python-docx python-pptx odfpy PyPDF2' pour une prise en charge complète.")
 
 # Imports pour le découpage de texte
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
@@ -63,6 +73,7 @@ from langchain.schema import Document
 # -----------------------------------------
 # Configuration du système
 # -----------------------------------------
+
 # Chemin vers le dossier des cours
 COURS_DIR = os.path.join(os.getcwd(), "cours")
 # Nom de l'index Pinecone
@@ -212,15 +223,31 @@ def extraire_contenu_fichier(file_path, file_extension):
                         text += page_text + "\n\n"
                 return text
             except Exception as e:
-                print(f"Erreur avec pdfplumber: {e}. Tentative alternative...")
-                # Si pdfplumber échoue, essayer une méthode alternative si disponible
-                import PyPDF2
-                with open(file_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
-                    text = ""
-                    for page in reader.pages:
-                        text += page.extract_text() + "\n\n"
-                return text
+                print(f"Erreur avec pdfplumber: {e}. Tentative alternative avec PyPDF2...")
+                
+                # Vérifier explicitement si PyPDF2 est disponible
+                global PYPDF2_AVAILABLE
+                if not PYPDF2_AVAILABLE:
+                    try:
+                        # Tenter d'importer à nouveau au cas où
+                        import PyPDF2
+                        PYPDF2_AVAILABLE = True
+                        print("PyPDF2 importé avec succès pendant l'extraction!")
+                    except ImportError as imp_err:
+                        print(f"Échec de l'import PyPDF2: {imp_err}")
+                        return f"[Erreur d'extraction PDF: Module PyPDF2 manquant, veuillez installer 'pip install PyPDF2==3.0.1']"
+                
+                # Maintenant PyPDF2 devrait être disponible
+                try:
+                    with open(file_path, 'rb') as file:
+                        reader = PyPDF2.PdfReader(file)
+                        text = ""
+                        for page in reader.pages:
+                            text += page.extract_text() + "\n\n"
+                    return text
+                except Exception as pdf_err:
+                    print(f"Erreur avec PyPDF2: {pdf_err}")
+                    return f"[Erreur d'extraction PDF avec PyPDF2: {str(pdf_err)}]"
         
         # Fichiers Word (DOCX)
         elif file_extension == '.docx':
@@ -1213,6 +1240,64 @@ def main():
     Fonction principale qui permet d'utiliser le système interactivement.
     """
     print("=== Système de gestion de cours et génération de questions ===")
+    
+    # Vérifier que l'extraction PDF fonctionne
+    print("\n=== Vérification de PyPDF2 ===")
+    if PYPDF2_AVAILABLE:
+        try:
+            # Créer un petit PDF en mémoire pour tester
+            print("Test de PyPDF2 avec un document en mémoire...")
+            from io import BytesIO
+            
+            # Créer un PDF minimaliste en mémoire pour tester
+            test_successful = False
+            try:
+                # PyPDF2 3.0+ utilise PdfWriter pour la création
+                from PyPDF2 import PdfWriter
+                pdf_bytes = BytesIO()
+                writer = PdfWriter()
+                page = writer.add_blank_page(width=500, height=500)
+                writer.add_page(page)
+                writer.write(pdf_bytes)
+                pdf_bytes.seek(0)
+                
+                # Lire le PDF créé
+                reader = PyPDF2.PdfReader(pdf_bytes)
+                print(f"PDF de test créé avec {len(reader.pages)} page(s)")
+                test_successful = True
+            except Exception as e:
+                print(f"Erreur lors du test de création de PDF: {e}")
+            
+            # Si le test avec PDF en mémoire échoue, essayer avec un fichier réel
+            if not test_successful:
+                # Chercher un fichier PDF pour tester
+                pdf_files = []
+                for root, dirs, files in os.walk(COURS_DIR):
+                    for file in files:
+                        if file.lower().endswith('.pdf'):
+                            pdf_files.append(os.path.join(root, file))
+                
+                if pdf_files:
+                    test_file = pdf_files[0]
+                    print(f"Test avec le fichier existant: {test_file}")
+                    with open(test_file, 'rb') as f:
+                        reader = PyPDF2.PdfReader(f)
+                        num_pages = len(reader.pages)
+                        print(f"Extraction réussie! Le fichier contient {num_pages} pages.")
+                        test_successful = True
+                else:
+                    print("Aucun fichier PDF trouvé pour tester l'extraction.")
+            
+            if test_successful:
+                print("✅ Vérification PyPDF2 terminée avec succès!")
+            else:
+                print("⚠️ Impossible de valider complètement la fonctionnalité PyPDF2.")
+        except Exception as e:
+            print(f"❌ ERREUR: Problème avec PyPDF2: {e}")
+            print("Les extractions PDF peuvent échouer pendant l'exécution!")
+    else:
+        print("❌ PyPDF2 n'est pas disponible. Les extractions PDF seront limitées.")
+        print("Installez PyPDF2 avec: pip install PyPDF2==3.0.1")
     
     # Initialiser la structure des dossiers
     initialiser_structure_dossiers()

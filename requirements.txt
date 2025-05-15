@@ -1,10 +1,12 @@
 # Dépendances de base
 python-dotenv==1.0.0
-langchain==0.1.0
-langchain_text_splitters==0.0.2
-langchain_openai==0.0.2
-langchain_pinecone==0.1.2
-pinecone-client==3.0.0
+# Using newer versions with compatible dependencies
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
+langchain-openai>=0.3.0
+langchain-pinecone>=0.2.6
+langchain-core>=0.3.34
+pinecone-client>=3.2.2,<5
 
 # Traitement de documents
 pdfplumber==0.10.3
@@ -12,10 +14,10 @@ PyPDF2==3.0.1
 python-docx==1.0.1
 python-pptx==0.6.21
 odfpy==1.4.1
-textract==1.6.5  # Optionnel pour les fichiers .doc
+# textract==1.6.4
 
 # Intégration OpenAI
-openai==1.10.0
+openai>=1.68.2
 
 # Utilitaires
 tqdm==4.66.1 
