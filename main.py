@@ -1,6 +1,6 @@
 """
-RAG-Chatbot - Système de génération augmentée par récupération
-Ce script implémente un système RAG pour la documentation du WonderVector5000
+Gestion des cours avec RAG - Système de génération de questions
+Ce script permet de gérer des documents de cours par matière et de générer des questions de réflexion.
 """
 
 # -----------------------------------------
@@ -10,6 +10,11 @@ import os
 import time
 import uuid
 import warnings
+import glob
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Chargement des variables d'environnement
@@ -23,7 +28,7 @@ os.environ["LANGCHAIN_PROJECT"] = "not-needed"
 warnings.filterwarnings("ignore", category=Warning, module="langsmith")
 
 # Imports pour le découpage de texte
-from langchain_text_splitters import MarkdownHeaderTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 # Imports pour la base de données vectorielle
 from pinecone import Pinecone, ServerlessSpec
@@ -33,128 +38,225 @@ from langchain_pinecone import PineconeEmbeddings, PineconeVectorStore
 from langchain_openai import ChatOpenAI
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain import hub
 from langchain.prompts import ChatPromptTemplate
+from langchain import hub
 from langchain.schema import Document
 
 # -----------------------------------------
-# Données de démonstration
+# Configuration du système
 # -----------------------------------------
-def get_markdown_document():
+# Chemin vers le dossier des cours
+COURS_DIR = os.path.join(os.getcwd(), "cours")
+# Nom de l'index Pinecone
+INDEX_NAME = "rag-education"
+# Fichier de suivi des mises à jour
+METADATA_FILE = os.path.join(os.getcwd(), "metadata_cours.json")
+
+# -----------------------------------------
+# Fonctions de gestion des fichiers
+# -----------------------------------------
+def initialiser_structure_dossiers():
     """
-    Renvoie le document markdown de démonstration sur le WonderVector5000.
+    Initialise la structure des dossiers pour les cours si elle n'existe pas.
+    Crée un dossier par matière avec un fichier README explicatif.
+    """
+    # Créer le dossier principal des cours s'il n'existe pas
+    if not os.path.exists(COURS_DIR):
+        os.makedirs(COURS_DIR)
+        print(f"Dossier principal des cours créé: {COURS_DIR}")
+    
+    # Liste des matières (à adapter selon vos besoins)
+    matieres = ["SYD"]
+    
+    for matiere in matieres:
+        matiere_dir = os.path.join(COURS_DIR, matiere)
+        if not os.path.exists(matiere_dir):
+            os.makedirs(matiere_dir)
+            
+            # Créer un fichier README explicatif
+            readme_path = os.path.join(matiere_dir, "README.md")
+            with open(readme_path, "w") as f:
+                f.write(f"# Documents de cours pour {matiere}\n\n")
+                f.write("Placez ici vos documents de cours pour cette matière.\n")
+                f.write("Formats supportés: .md, .txt\n\n")
+                f.write("Structure recommandée pour les fichiers markdown:\n")
+                f.write("- Utilisez des titres ## pour les sections principales\n")
+                f.write("- Chaque fichier doit traiter d'un concept ou d'une notion\n")
+            
+            print(f"Dossier pour la matière {matiere} créé avec un README explicatif")
+
+def lire_fichiers_matiere(matiere):
+    """
+    Lit tous les fichiers de cours pour une matière donnée.
+    
+    Args:
+        matiere (str): Identifiant de la matière (ex: "SYD", "BD")
+        
+    Returns:
+        list: Liste des documents avec leur contenu et métadonnées
+    """
+    matiere_dir = os.path.join(COURS_DIR, matiere)
+    
+    # Vérifier si le dossier existe
+    if not os.path.exists(matiere_dir):
+        print(f"Erreur: Le dossier de la matière {matiere} n'existe pas.")
+        return []
+    
+    documents = []
+    
+    # Extensions supportées
+    extensions = ["*.md", "*.txt"]
+    
+    # Parcourir tous les fichiers avec les extensions supportées
+    for ext in extensions:
+        for file_path in glob.glob(os.path.join(matiere_dir, "**", ext), recursive=True):
+            try:
+                # Éviter de traiter les fichiers README
+                if os.path.basename(file_path).lower() == "readme.md":
+                    continue
+                
+                # Calculer le hash du fichier pour suivre les modifications
+                file_hash = calculer_hash_fichier(file_path)
+                
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Métadonnées du document
+                relative_path = os.path.relpath(file_path, COURS_DIR)
+                metadata = {
+                    "source": relative_path,
+                    "matiere": matiere,
+                    "filename": os.path.basename(file_path),
+                    "filetype": os.path.splitext(file_path)[1],
+                    "file_hash": file_hash,
+                    "updated_at": datetime.now().isoformat()
+                }
+                
+                documents.append({"content": content, "metadata": metadata})
+                print(f"Fichier lu: {relative_path}")
+                
+            except Exception as e:
+                print(f"Erreur lors de la lecture du fichier {file_path}: {e}")
+    
+    return documents
+
+def calculer_hash_fichier(file_path):
+    """
+    Calcule un hash MD5 du contenu d'un fichier pour détecter les modifications.
+    
+    Args:
+        file_path (str): Chemin vers le fichier
+        
+    Returns:
+        str: Hash MD5 du fichier
+    """
+    hash_md5 = hashlib.md5()
+    
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+            
+    return hash_md5.hexdigest()
+
+def charger_metadata():
+    """
+    Charge les métadonnées des précédentes mises à jour depuis un fichier JSON.
     
     Returns:
-        str: Le contenu markdown complet
+        dict: Métadonnées des documents indexés
     """
-    return """## Introduction
+    if os.path.exists(METADATA_FILE):
+        try:
+            with open(METADATA_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Erreur lors du chargement des métadonnées: {e}")
+            return {"matieres": {}}
+    else:
+        return {"matieres": {}}
 
-Welcome to the whimsical world of the WonderVector5000, an astonishing leap into the realms of imaginative technology. This extraordinary device, borne of creative fancy, promises to revolutionize absolutely nothing while dazzling you with its fantastical features. Whether you're a seasoned technophile or just someone looking for a bit of fun, the WonderVector5000 is sure to leave you amused and bemused in equal measure. Let's explore the incredible, albeit entirely fictitious, specifications, setup process, and troubleshooting tips for this marvel of modern nonsense.
-
-## Product overview
-
-The WonderVector5000 is packed with features that defy logic and physics, each designed to sound impressive while maintaining a delightful air of absurdity:
-
-- Quantum Flibberflabber Engine: The heart of the WonderVector5000, this engine operates on principles of quantum flibberflabber, a phenomenon as mysterious as it is meaningless. It's said to harness the power of improbability to function seamlessly across multiple dimensions.
-
-- Hyperbolic Singularity Matrix: This component compresses infinite possibilities into a singular hyperbolic state, allowing the device to predict outcomes with 0% accuracy, ensuring every use is a new adventure.
-
-- Aetherial Flux Capacitor: Drawing energy from the fictional aether, this flux capacitor provides unlimited power by tapping into the boundless reserves of imaginary energy fields.
-
-- Multi-Dimensional Holo-Interface: Interact with the WonderVector5000 through its holographic interface that projects controls and information in three-and-a-half dimensions, creating a user experience that's simultaneously futuristic and perplexing.
-
-- Neural Fandango Synchronizer: This advanced feature connects directly to the user's brain waves, converting your deepest thoughts into tangible actions—albeit with results that are whimsically unpredictable.
-
-- Chrono-Distortion Field: Manipulate time itself with the WonderVector5000's chrono-distortion field, allowing you to experience moments before they occur or revisit them in a state of temporal flux.
-
-## Use cases
-
-While the WonderVector5000 is fundamentally a device of fiction and fun, let's imagine some scenarios where it could hypothetically be applied:
-
-- Time Travel Adventures: Use the Chrono-Distortion Field to visit key moments in history or glimpse into the future. While actual temporal manipulation is impossible, the mere idea sparks endless storytelling possibilities.
-
-- Interdimensional Gaming: Engage with the Multi-Dimensional Holo-Interface for immersive, out-of-this-world gaming experiences. Imagine games that adapt to your thoughts via the Neural Fandango Synchronizer, creating a unique and ever-changing environment.
-
-- Infinite Creativity: Harness the Hyperbolic Singularity Matrix for brainstorming sessions. By compressing infinite possibilities into hyperbolic states, it could theoretically help unlock unprecedented creative ideas.
-
-- Energy Experiments: Explore the concept of limitless power with the Aetherial Flux Capacitor. Though purely fictional, the notion of drawing energy from the aether could inspire innovative thinking in energy research.
-
-## Getting started
-
-Setting up your WonderVector5000 is both simple and absurdly intricate. Follow these steps to unleash the full potential of your new device:
-
-1. Unpack the Device: Remove the WonderVector5000 from its anti-gravitational packaging, ensuring to handle with care to avoid disturbing the delicate balance of its components.
-
-2. Initiate the Quantum Flibberflabber Engine: Locate the translucent lever marked "QFE Start" and pull it gently. You should notice a slight shimmer in the air as the engine engages, indicating that quantum flibberflabber is in effect.
-
-3. Calibrate the Hyperbolic Singularity Matrix: Turn the dials labeled 'Infinity A' and 'Infinity B' until the matrix stabilizes. You'll know it's calibrated correctly when the display shows a single, stable "infinity symbol".
-
-4. Engage the Aetherial Flux Capacitor: Insert the EtherKey into the designated slot and turn it clockwise. A faint humming sound should confirm that the aetherial flux capacitor is active.
-
-5. Activate the Multi-Dimensional Holo-Interface: Press the button resembling a floating question mark to activate the holo-interface. The controls should materialize before your eyes, slightly out of phase with reality.
-
-6. Synchronize the Neural Fandango Synchronizer: Place the neural headband on your forehead and think of the word "Wonder". The device will sync with your thoughts, a process that should take just a few moments.
-
-7. Set the Chrono-Distortion Field: Use the temporal sliders to adjust the time settings. Recommended presets include "Past", "Present", and "Future", though feel free to explore other, more abstract temporal states.
-
-## Troubleshooting
-
-Even a device as fantastically designed as the WonderVector5000 can encounter problems. Here are some common issues and their solutions:
-
-- Issue: The Quantum Flibberflabber Engine won't start.
-
-    - Solution: Ensure the anti-gravitational packaging has been completely removed. Check for any residual shards of improbability that might be obstructing the engine.
-
-- Issue: The Hyperbolic Singularity Matrix displays "infinity infinity".
-
-    - Solution: This indicates a hyper-infinite loop. Reset the dials to zero and then adjust them slowly until the display shows a single, stable infinity symbol.
-
-- Issue: The Aetherial Flux Capacitor isn't engaging.
-
-    - Solution: Verify that the EtherKey is properly inserted and genuine. Counterfeit EtherKeys can often cause malfunctions. Replace with an authenticated EtherKey if necessary.
-
-- Issue: The Multi-Dimensional Holo-Interface shows garbled projections.
-
-    - Solution: Realign the temporal resonators by tapping the holographic screen three times in quick succession. This should stabilize the projections.
-
-- Issue: The Neural Fandango Synchronizer causes headaches.
-
-    - Solution: Ensure the headband is properly positioned and not too tight. Relax and focus on simple, calming thoughts to ease the synchronization process.
-
-- Issue: The Chrono-Distortion Field is stuck in the past.
-
-    - Solution: Increase the temporal flux by 5%. If this fails, perform a hard reset by holding down the "Future" slider for ten seconds."""
+def sauvegarder_metadata(metadata):
+    """
+    Sauvegarde les métadonnées des documents indexés dans un fichier JSON.
+    
+    Args:
+        metadata (dict): Métadonnées à sauvegarder
+    """
+    try:
+        with open(METADATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde des métadonnées: {e}")
 
 # -----------------------------------------
 # Fonctions de traitement du texte
 # -----------------------------------------
-def split_document(markdown_document):
+def split_document(document):
     """
-    Divise un document markdown en sections basées sur les en-têtes.
+    Divise un document en sections.
+    Utilise des stratégies différentes selon le type de fichier.
     
     Args:
-        markdown_document (str): Document markdown à découper
+        document (dict): Document avec contenu et métadonnées
         
     Returns:
-        list: Liste des sections découpées avec leurs métadonnées
+        list: Liste des sections avec leurs métadonnées
     """
-    headers_to_split_on = [("##", "Header 2")]
+    content = document["content"]
+    metadata = document["metadata"]
     
-    markdown_splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=headers_to_split_on, strip_headers=False
+    # Stratégie pour les fichiers markdown: découpage par en-têtes
+    if metadata["filetype"] == ".md":
+        headers_to_split_on = [
+            ("##", "Header 2"),
+            ("###", "Header 3")
+        ]
+        
+        try:
+            markdown_splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=headers_to_split_on, strip_headers=False
+            )
+            
+            splits = markdown_splitter.split_text(content)
+            
+            # Si aucun en-tête n'a été trouvé, utiliser la méthode par caractères
+            if not splits:
+                return split_by_characters(content, metadata)
+                
+            # Ajouter les métadonnées du document à chaque split
+            for split in splits:
+                split.metadata.update(metadata)
+                
+            return splits
+            
+        except Exception as e:
+            print(f"Erreur lors du découpage markdown: {e}")
+            # Fallback sur le découpage par caractères
+            return split_by_characters(content, metadata)
+    
+    # Pour les autres types de fichiers: découpage par caractères
+    else:
+        return split_by_characters(content, metadata)
+
+def split_by_characters(content, metadata):
+    """
+    Divise un document en chunks par caractères (méthode de secours).
+    
+    Args:
+        content (str): Contenu du document
+        metadata (dict): Métadonnées du document
+        
+    Returns:
+        list: Liste des sections avec leurs métadonnées
+    """
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len,
     )
     
-    splits = markdown_splitter.split_text(markdown_document)
-    
-    # Afficher des infos de débogage sur les morceaux créés
-    print(f"Nombre de sections: {len(splits)}")
-    if splits:
-        print(f"Métadonnées de la première section: {splits[0].metadata}")
-        print(f"Échantillon de contenu de la première section: {splits[0].page_content[:100]}...")
-    else:
-        print("ATTENTION: Aucune section n'a été créée!")
-        
-    return splits
+    docs = text_splitter.create_documents([content], [metadata])
+    return docs
 
 # -----------------------------------------
 # Configuration de la base de données vectorielle
@@ -171,10 +273,9 @@ def initialize_pinecone():
     region = os.environ.get('PINECONE_REGION') or 'us-east-1'
     
     pc = Pinecone(api_key=pinecone_api_key)
-    index_name = "rag-getting-started"
     spec = ServerlessSpec(cloud=cloud, region=region)
     
-    return pc, index_name, spec
+    return pc, INDEX_NAME, spec
 
 def setup_embeddings():
     """
@@ -206,6 +307,7 @@ def create_or_get_index(pc, index_name, embeddings, spec):
         object: Index Pinecone
     """
     if index_name not in pc.list_indexes().names():
+        print(f"Création d'un nouvel index: {index_name}")
         pc.create_index(
             name=index_name,
             dimension=embeddings.dimension,
@@ -213,81 +315,335 @@ def create_or_get_index(pc, index_name, embeddings, spec):
             spec=spec
         )
         # Attendre que l'index s'initialise
+        print("Attente de l'initialisation de l'index...")
         time.sleep(10)
     
-    # Afficher l'état de l'index avant l'insertion
-    print("État de l'index avant insertion:")
-    index_stats = pc.Index(index_name).describe_index_stats()
-    print(index_stats)
+    # Afficher l'état de l'index
+    print("État actuel de l'index:")
+    index = pc.Index(index_name)
+    index_stats = index.describe_index_stats()
+    
+    # Utiliser un dictionnaire au lieu d'un objet spécifique de Pinecone
+    stats_dict = {
+        "dimension": index_stats.dimension,
+        "index_fullness": index_stats.index_fullness,
+        "namespaces": {},
+        "total_vector_count": index_stats.total_vector_count
+    }
+    
+    # Ajouter les informations sur les namespaces
+    if hasattr(index_stats, 'namespaces') and index_stats.namespaces:
+        for ns_name, ns_data in index_stats.namespaces.items():
+            stats_dict["namespaces"][ns_name] = {"vector_count": ns_data.vector_count}
+    
+    print(json.dumps(stats_dict, indent=2))
     print("\n")
     
-    return pc.Index(index_name)
+    return index
 
-def manage_namespace(index, namespace):
+def get_matiere_namespace(matiere):
     """
-    Gère l'espace de noms dans l'index, en créant un nouvel espace si nécessaire.
+    Génère un namespace standardisé pour une matière.
     
     Args:
-        index: Index Pinecone
-        namespace (str): Nom de l'espace
+        matiere (str): Identifiant de la matière
         
     Returns:
-        str: Nom final de l'espace utilisé
+        str: Namespace standardisé
     """
-    try:
-        namespaces = index.describe_index_stats()['namespaces']
-        if namespace in namespaces:
-            print(f"Suppression de l'espace de noms existant: {namespace}")
-            # On ne peut pas directement supprimer un espace de noms, donc on en crée un nouveau unique
-            new_namespace = f"{namespace}-{uuid.uuid4()}"
-            print(f"Utilisation du nouvel espace de noms: {new_namespace}")
-            return new_namespace
-        return namespace
-    except Exception as e:
-        print(f"Erreur lors de la vérification des espaces de noms: {e}")
-        return namespace
+    return f"matiere-{matiere.lower()}"
 
-def upsert_documents(splits, index_name, embeddings, namespace):
+def upsert_documents(pc, index_name, embeddings, matiere, docs):
     """
-    Insère les documents dans la base de données vectorielle.
+    Met à jour l'index vectoriel avec de nouveaux documents ou des documents modifiés.
     
     Args:
-        splits (list): Liste des sections de document à insérer
+        pc: Client Pinecone
         index_name (str): Nom de l'index
         embeddings: Modèle d'embedding
-        namespace (str): Espace de noms à utiliser
+        matiere (str): Identifiant de la matière
+        docs (list): Liste des sections de documents
         
     Returns:
-        PineconeVectorStore: Store vectoriel avec les documents insérés
+        tuple: (store vectoriel, namespace utilisé)
     """
+    if not docs:
+        print(f"Aucun document à insérer pour la matière {matiere}")
+        return None, None
+    
+    namespace = get_matiere_namespace(matiere)
+    
     try:
-        print(f"Tentative d'insertion de {len(splits)} documents dans l'espace '{namespace}'")
+        print(f"Insertion de {len(docs)} sections de documents dans l'espace '{namespace}'")
         vector_store = PineconeVectorStore.from_documents(
-            documents=splits,
+            documents=docs,
             index_name=index_name,
             embedding=embeddings,
             namespace=namespace
         )
         print("Insertion réussie")
-        return vector_store
+        return vector_store, namespace
     except Exception as e:
         print(f"Erreur lors de l'insertion: {e}")
-        return None
+        return None, None
+
+def delete_documents(pc, index_name, matiere, file_paths):
+    """
+    Supprime les documents d'un index vectoriel pour les fichiers qui ont été supprimés,
+    en utilisant une approche en deux étapes: d'abord identifier les vecteurs par requête,
+    puis les supprimer par ID.
+    
+    Args:
+        pc: Client Pinecone
+        index_name (str): Nom de l'index
+        matiere (str): Identifiant de la matière
+        file_paths (list): Liste des chemins de fichiers supprimés
+        
+    Returns:
+        bool: True si des suppressions ont été effectuées, False sinon
+    """
+    if not file_paths:
+        return False
+    
+    namespace = get_matiere_namespace(matiere)
+    
+    try:
+        index = pc.Index(index_name)
+        deleted_count = 0
+        
+        # Afficher les informations de l'index pour le débogage
+        try:
+            index_stats = index.describe_index_stats()
+            print(f"Statistiques de l'index '{index_name}':")
+            print(f"- Dimension: {index_stats.dimension}")
+            print(f"- Total vecteurs: {index_stats.total_vector_count}")
+            
+            # Afficher les informations du namespace si disponible
+            if hasattr(index_stats, 'namespaces') and namespace in index_stats.namespaces:
+                ns_stats = index_stats.namespaces[namespace]
+                print(f"- Namespace '{namespace}': {ns_stats.vector_count} vecteurs")
+                
+            # Obtenir la dimension du vecteur pour la requête
+            dimension = index_stats.dimension
+        except Exception as stats_error:
+            print(f"Impossible d'obtenir les statistiques de l'index: {stats_error}")
+            # Valeur par défaut pour la dimension
+            dimension = 1024
+        
+        # Traiter chaque fichier à supprimer
+        for file_path in file_paths:
+            print(f"\nSuppression des vecteurs pour: {file_path}")
+            
+            # Étape 1: Identifier les vecteurs par requête
+            try:
+                # Créer un vecteur zéro pour la requête
+                zero_vector = [0.0] * dimension
+                
+                # Exécuter une requête avec un grand nombre de résultats
+                print("1. Recherche des vecteurs à supprimer...")
+                query_results = index.query(
+                    namespace=namespace,
+                    vector=zero_vector,
+                    top_k=1000,  # Augmenter si nécessaire
+                    include_metadata=True
+                )
+                
+                # Préparer la liste des IDs à supprimer
+                ids_to_delete = []
+                
+                # Vérifier les résultats de la requête
+                if hasattr(query_results, 'matches') and query_results.matches:
+                    print(f"   Vecteurs trouvés: {len(query_results.matches)}")
+                    
+                    # Identifier les vecteurs correspondant au fichier supprimé
+                    for match in query_results.matches:
+                        # Vérifier si le vecteur a des métadonnées
+                        if hasattr(match, 'metadata') and match.metadata:
+                            # Vérifier si le champ source correspond exactement au fichier
+                            if 'source' in match.metadata and match.metadata['source'] == file_path:
+                                ids_to_delete.append(match.id)
+                                # Afficher un exemple pour confirmation
+                                if len(ids_to_delete) == 1:
+                                    print(f"   Exemple de métadonnées trouvées: {match.metadata}")
+                
+                # Étape 2: Supprimer les vecteurs identifiés
+                if ids_to_delete:
+                    print(f"2. Suppression de {len(ids_to_delete)} vecteurs...")
+                    
+                    # Supprimer par lots pour éviter les limitations d'API
+                    batch_size = 100
+                    for i in range(0, len(ids_to_delete), batch_size):
+                        batch = ids_to_delete[i:i+batch_size]
+                        delete_result = index.delete(
+                            ids=batch,
+                            namespace=namespace
+                        )
+                        
+                        if hasattr(delete_result, 'deleted_count'):
+                            print(f"   Lot {i//batch_size + 1}: {delete_result.deleted_count} vecteurs supprimés")
+                        else:
+                            print(f"   Lot {i//batch_size + 1}: suppression effectuée")
+                    
+                    deleted_count += len(ids_to_delete)
+                    print(f"✅ {len(ids_to_delete)} vecteurs supprimés pour {file_path}")
+                else:
+                    print(f"❌ Aucun vecteur trouvé avec source={file_path}")
+                    
+                    # Afficher un échantillon de métadonnées pour le débogage
+                    if hasattr(query_results, 'matches') and query_results.matches:
+                        print("Exemples de métadonnées dans l'index (pour déboguer):")
+                        samples_shown = 0
+                        for match in query_results.matches:
+                            if hasattr(match, 'metadata') and match.metadata and samples_shown < 3:
+                                print(f"- ID: {match.id}")
+                                for key, value in match.metadata.items():
+                                    print(f"  {key}: {value}")
+                                samples_shown += 1
+                                print()
+                
+            except Exception as e:
+                print(f"Erreur lors de la recherche/suppression pour {file_path}: {e}")
+        
+        # Résumer les résultats
+        if deleted_count > 0:
+            print(f"\n✅ Total: {deleted_count} vecteurs supprimés pour {len(file_paths)} fichiers")
+            return True
+        else:
+            print(f"\n❌ Aucun vecteur n'a pu être supprimé pour les fichiers spécifiés")
+            return False
+            
+    except Exception as e:
+        print(f"Erreur générale lors de la suppression des documents: {e}")
+        return False
+
+# -----------------------------------------
+# Gestion des mises à jour
+# -----------------------------------------
+def mettre_a_jour_matiere(pc, index_name, embeddings, matiere):
+    """
+    Met à jour l'index vectoriel pour une matière spécifique,
+    en ne traitant que les fichiers nouveaux ou modifiés et en supprimant les fichiers disparus.
+    
+    Args:
+        pc: Client Pinecone
+        index_name (str): Nom de l'index
+        embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière
+        
+    Returns:
+        bool: True si des mises à jour ont été effectuées, False sinon
+    """
+    # Charger les métadonnées des précédentes indexations
+    metadata = charger_metadata()
+    
+    # Initialiser la section pour cette matière si elle n'existe pas
+    if matiere not in metadata["matieres"]:
+        metadata["matieres"][matiere] = {
+            "fichiers": {},
+            "derniere_mise_a_jour": None
+        }
+    
+    # Récupérer les fichiers précédemment indexés
+    fichiers_matieres = metadata["matieres"][matiere]["fichiers"]
+    
+    # Lire tous les fichiers de cours actuels pour cette matière
+    documents = lire_fichiers_matiere(matiere)
+    sources_actuelles = set()
+    if documents:
+        sources_actuelles = {doc["metadata"]["source"] for doc in documents}
+    
+    # Déterminer quels fichiers ont été supprimés
+    sources_indexees = set(fichiers_matieres.keys())
+    fichiers_supprimes = sources_indexees - sources_actuelles
+    
+    # Afficher les fichiers supprimés
+    if fichiers_supprimes:
+        print(f"Fichiers supprimés détectés: {len(fichiers_supprimes)}")
+        for source in fichiers_supprimes:
+            print(f"  - {source}")
+        
+        # Supprimer les fichiers de l'index
+        delete_documents(pc, index_name, matiere, list(fichiers_supprimes))
+        
+        # Mettre à jour les métadonnées pour refléter les suppressions
+        for source in fichiers_supprimes:
+            if source in fichiers_matieres:
+                del fichiers_matieres[source]
+    
+    if not documents:
+        print(f"Aucun document trouvé pour la matière {matiere}")
+        # Sauvegarder les métadonnées si des fichiers ont été supprimés
+        if fichiers_supprimes:
+            metadata["matieres"][matiere]["derniere_mise_a_jour"] = datetime.now().isoformat()
+            sauvegarder_metadata(metadata)
+            return True
+        return False
+    
+    # Déterminer quels fichiers ont été modifiés ou ajoutés
+    docs_a_traiter = []
+    
+    for doc in documents:
+        source = doc["metadata"]["source"]
+        file_hash = doc["metadata"]["file_hash"]
+        
+        # Vérifier si le fichier est nouveau ou modifié
+        if source not in fichiers_matieres or fichiers_matieres[source] != file_hash:
+            print(f"Fichier nouveau ou modifié détecté: {source}")
+            docs_a_traiter.append(doc)
+            # Mettre à jour le hash dans les métadonnées
+            fichiers_matieres[source] = file_hash
+    
+    # Si aucun document n'a été modifié ni supprimé, terminer
+    if not docs_a_traiter and not fichiers_supprimes:
+        print(f"Aucune mise à jour nécessaire pour la matière {matiere}")
+        return False
+    
+    # Si des documents ont été modifiés ou ajoutés, les traiter
+    if docs_a_traiter:
+        # Diviser les documents en sections
+        sections = []
+        for doc in docs_a_traiter:
+            doc_sections = split_document(doc)
+            sections.extend(doc_sections)
+        
+        print(f"Nombre total de sections à indexer: {len(sections)}")
+        
+        # Mettre à jour l'index vectoriel
+        vector_store, namespace = upsert_documents(pc, index_name, embeddings, matiere, sections)
+        
+        if not vector_store and not fichiers_supprimes:
+            return False
+    
+    # Mettre à jour les métadonnées
+    metadata["matieres"][matiere]["derniere_mise_a_jour"] = datetime.now().isoformat()
+    sauvegarder_metadata(metadata)
+    return True
 
 # -----------------------------------------
 # Configuration du système RAG
 # -----------------------------------------
-def setup_rag_system(vector_store, custom_prompt=None):
+def setup_rag_system(index_name, embeddings, matiere, custom_prompt=None):
     """
-    Configure le système RAG avec le retriever et le modèle de langage.
+    Configure le système RAG pour une matière spécifique.
     
     Args:
-        vector_store: Base de données vectorielle contenant les documents
-        custom_prompt: Prompt personnalisé à utiliser à la place du prompt par défaut
+        index_name (str): Nom de l'index Pinecone
+        embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière
+        custom_prompt: Prompt personnalisé facultatif
         
     Returns:
         object: Chaîne de récupération configurée
     """
+    namespace = get_matiere_namespace(matiere)
+    
+    # Créer un store vectoriel pour cette matière
+    vector_store = PineconeVectorStore(
+        index_name=index_name,
+        embedding=embeddings,
+        namespace=namespace
+    )
+    
     # Configurer le prompt de question-réponse
     if custom_prompt:
         retrieval_qa_chat_prompt = custom_prompt
@@ -312,105 +668,6 @@ def setup_rag_system(vector_store, custom_prompt=None):
     
     return retrieval_chain
 
-# -----------------------------------------
-# Fonctions d'interrogation
-# -----------------------------------------
-def run_rag_query(retrieval_chain, query):
-    """
-    Exécute une requête sur le système RAG et affiche les résultats.
-    
-    Args:
-        retrieval_chain: Chaîne de récupération configurée
-        query (str): Question de l'utilisateur
-        
-    Returns:
-        dict: Réponse complète du système RAG
-    """
-    print(f"\n\n--- Requête RAG: '{query}' ---")
-    
-    # Exécuter la requête
-    response = retrieval_chain.invoke({"input": query})
-    
-    # Afficher la réponse
-    print(f"\nRéponse: {response['answer']}")
-    
-    # Afficher les documents sources
-    print("\nDocuments sources:")
-    for i, doc in enumerate(response["context"]):
-        print(f"\nDocument {i+1}:")
-        print(f"Section: {doc.metadata.get('Header 2', 'Inconnue')}")
-        print(f"Contenu: {doc.page_content[:150]}...")
-    
-    return response
-
-def verify_vector_store(index, namespace, embeddings):
-    """
-    Vérifie que les vecteurs existent en effectuant une requête de test.
-    
-    Args:
-        index: Index Pinecone
-        namespace (str): Espace de noms à interroger
-        embeddings: Modèle d'embedding
-    """
-    try:
-        query = "What are the use cases for WonderVector5000?"
-        query_embedding = embeddings.embed_query(query)
-        
-        results = index.query(
-            vector=query_embedding,
-            top_k=1,
-            namespace=namespace,
-            include_metadata=True
-        )
-        
-        print(f"Résultats de la requête de vérification: {results}")
-    except Exception as e:
-        print(f"Erreur lors de la requête: {e}")
-
-def interroger_matiere(vector_store, matiere, query, custom_prompt=None, index_name=None, embeddings=None):
-    """
-    Interroge spécifiquement les documents d'une matière.
-    
-    Args:
-        vector_store: Base de données vectorielle
-        matiere (str): Identifiant de la matière
-        query (str): Question de l'utilisateur
-        custom_prompt: Prompt personnalisé facultatif
-        index_name (str): Nom de l'index Pinecone (obligatoire si vector_store ne fournit pas cette info)
-        embeddings: Modèle d'embedding (obligatoire si vector_store ne fournit pas cette info)
-        
-    Returns:
-        dict: Réponse du système RAG
-    """
-    namespace = f"matiere-{matiere.lower()}"
-    
-    # Obtenir le nom de l'index et l'embedding soit à partir des paramètres, soit du vector_store
-    if index_name is None:
-        if hasattr(vector_store, 'index_name'):
-            index_name = vector_store.index_name
-        else:
-            raise ValueError("Veuillez fournir un index_name, car vector_store ne le fournit pas")
-            
-    if embeddings is None:
-        if hasattr(vector_store, 'embedding'):
-            embeddings = vector_store.embedding
-        else:
-            raise ValueError("Veuillez fournir un embeddings, car vector_store ne le fournit pas")
-    
-    # Créer un nouveau store avec le namespace spécifique
-    matiere_store = PineconeVectorStore(
-        index_name=index_name,
-        embedding=embeddings,
-        namespace=namespace
-    )
-    
-    # Configurer le système RAG avec ce store
-    retrieval_chain = setup_rag_system(matiere_store, custom_prompt)
-    
-    # Exécuter la requête
-    return run_rag_query(retrieval_chain, query)
-
-# Template pour le tuteur
 def creer_prompt_tuteur(matiere):
     """
     Crée un prompt personnalisé pour le tuteur d'une matière spécifique.
@@ -446,16 +703,60 @@ def creer_prompt_tuteur(matiere):
     
     return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR).partial(matiere=matiere)
 
-def generer_question_reflexion(vector_store, matiere, concept_cle, index_name=None, embeddings=None):
+# -----------------------------------------
+# Fonctions d'interrogation
+# -----------------------------------------
+def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=None):
+    """
+    Interroge spécifiquement les documents d'une matière.
+    
+    Args:
+        index_name (str): Nom de l'index Pinecone
+        embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière
+        query (str): Question de l'utilisateur
+        custom_prompt: Prompt personnalisé facultatif
+        
+    Returns:
+        dict: Réponse du système RAG
+    """
+    # Configurer le système RAG
+    retrieval_chain = setup_rag_system(index_name, embeddings, matiere, custom_prompt)
+    
+    print(f"\n\n--- Requête pour {matiere}: '{query}' ---")
+    
+    # Exécuter la requête
+    response = retrieval_chain.invoke({"input": query})
+    
+    # Afficher la réponse
+    print(f"\nRéponse: {response['answer']}")
+    
+    # Afficher les documents sources
+    print("\nDocuments sources:")
+    for i, doc in enumerate(response["context"]):
+        print(f"\nDocument {i+1}:")
+        source = doc.metadata.get('source', 'Source inconnue')
+        print(f"Source: {source}")
+        header = ""
+        if "Header 2" in doc.metadata:
+            header = doc.metadata["Header 2"]
+        elif "Header 3" in doc.metadata:
+            header = doc.metadata["Header 3"]
+        if header:
+            print(f"Section: {header}")
+        print(f"Contenu: {doc.page_content[:150]}...")
+    
+    return response
+
+def generer_question_reflexion(index_name, embeddings, matiere, concept_cle):
     """
     Génère une question de réflexion sur un concept clé dans une matière spécifique.
     
     Args:
-        vector_store: Base de données vectorielle
-        matiere (str): Identifiant de la matière (ex: "SYD", "BD")
-        concept_cle (str): Concept sur lequel générer une question
         index_name (str): Nom de l'index Pinecone
         embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière (ex: "SYD", "BD")
+        concept_cle (str): Concept sur lequel générer une question
         
     Returns:
         str: Question de réflexion générée
@@ -465,28 +766,52 @@ def generer_question_reflexion(vector_store, matiere, concept_cle, index_name=No
     
     # Interroger la matière avec ce prompt
     result = interroger_matiere(
-        vector_store=vector_store, 
+        index_name=index_name, 
+        embeddings=embeddings,
         matiere=matiere, 
         query=f"Générer une question de réflexion sur le concept: {concept_cle}",
-        custom_prompt=tuteur_prompt,
-        index_name=index_name,
-        embeddings=embeddings
+        custom_prompt=tuteur_prompt
     )
     
     return result["answer"]
 
 # -----------------------------------------
-# Fonction principale
+# Fonction principale et utilitaires
 # -----------------------------------------
+def afficher_matieres_disponibles():
+    """
+    Affiche la liste des matières disponibles dans le dossier des cours.
+    
+    Returns:
+        list: Liste des matières disponibles
+    """
+    if not os.path.exists(COURS_DIR):
+        print("Le dossier des cours n'existe pas encore.")
+        return []
+    
+    matieres = []
+    for item in os.listdir(COURS_DIR):
+        item_path = os.path.join(COURS_DIR, item)
+        if os.path.isdir(item_path) and not item.startswith('.'):
+            matieres.append(item)
+    
+    if matieres:
+        print("Matières disponibles:")
+        for matiere in matieres:
+            print(f"- {matiere}")
+    else:
+        print("Aucune matière n'a été trouvée dans le dossier des cours.")
+    
+    return matieres
+
 def main():
     """
-    Fonction principale qui exécute tout le pipeline RAG.
+    Fonction principale qui permet d'utiliser le système interactivement.
     """
-    # Récupérer le document markdown
-    markdown_document = get_markdown_document()
+    print("=== Système de gestion de cours et génération de questions ===")
     
-    # Diviser le document en sections
-    splits = split_document(markdown_document)
+    # Initialiser la structure des dossiers
+    initialiser_structure_dossiers()
     
     # Initialiser Pinecone
     pc, index_name, spec = initialize_pinecone()
@@ -497,132 +822,76 @@ def main():
     # Créer ou récupérer l'index
     index = create_or_get_index(pc, index_name, embeddings, spec)
     
-    # Gérer l'espace de noms
-    namespace = "wondervector5000"
-    namespace = manage_namespace(index, namespace)
+    # Afficher les matières disponibles
+    matieres = afficher_matieres_disponibles()
     
-    # Insérer les documents
-    vector_store = upsert_documents(splits, index_name, embeddings, namespace)
-    
-    # Attendre la fin de l'insertion
-    time.sleep(10)
-    
-    # Vérifier l'état de l'index après l'insertion
-    print("État de l'index après insertion:")
-    print(pc.Index(index_name).describe_index_stats())
-    print("\n")
-    
-    # Vérifier que les vecteurs existent
-    verify_vector_store(index, namespace, embeddings)
-    
-    # Configurer le système RAG
-    retrieval_chain = setup_rag_system(vector_store)
-    
-    # Exécuter des requêtes de test
-    run_rag_query(retrieval_chain, "What are the features of the WonderVector5000?")
-    run_rag_query(retrieval_chain, "How do I troubleshoot the Quantum Flibberflabber Engine?")
-
-def initialiser_matiere(pc, index_name, embeddings, matiere, documents):
-    """
-    Initialise ou met à jour l'espace vectoriel pour une matière spécifique.
-    
-    Args:
-        pc: Client Pinecone
-        index_name (str): Nom de l'index
-        embeddings: Modèle d'embedding
-        matiere (str): Identifiant de la matière (ex: "SYD", "BD", etc.)
-        documents (list): Liste des documents à traiter pour cette matière
+    # Menu interactif
+    while True:
+        print("\nQue souhaitez-vous faire?")
+        print("1. Mettre à jour les documents d'une matière")
+        print("2. Générer une question de réflexion")
+        print("3. Poser une question sur une matière")
+        print("4. Quitter")
         
-    Returns:
-        tuple: (store vectoriel, namespace utilisé)
-    """
-    # Créer un namespace spécifique à la matière
-    namespace = f"matiere-{matiere.lower()}"
-    
-    # Récupérer l'index
-    index = pc.Index(index_name)
-    
-    # Gérer le namespace (vérifier s'il existe déjà)
-    namespace = manage_namespace(index, namespace)
-    
-    # Traiter et insérer les documents
-    splits = []
-    for doc in documents:
-        if isinstance(doc, str):
-            # Si c'est un texte brut, le découper
-            doc_splits = split_document(doc)
-            splits.extend(doc_splits)
-        elif hasattr(doc, 'page_content'):
-            # Si c'est déjà un Document LangChain
-            splits.append(doc)
+        choix = input("Votre choix (1-4): ")
+        
+        if choix == "1":
+            # Mettre à jour une matière
+            if not matieres:
+                print("Aucune matière disponible. Veuillez ajouter des documents dans le dossier 'cours'.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière à mettre à jour ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            mettre_a_jour_matiere(pc, index_name, embeddings, matiere)
+            
+        elif choix == "2":
+            # Générer une question de réflexion
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            concept = input("Entrez le concept sur lequel générer une question: ")
+            
+            try:
+                question = generer_question_reflexion(index_name, embeddings, matiere, concept)
+                print(f"\nQuestion générée: {question}")
+            except Exception as e:
+                print(f"Erreur lors de la génération de la question: {e}")
+            
+        elif choix == "3":
+            # Poser une question
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            question = input("Entrez votre question: ")
+            
+            try:
+                interroger_matiere(index_name, embeddings, matiere, question)
+            except Exception as e:
+                print(f"Erreur lors de la recherche: {e}")
+            
+        elif choix == "4":
+            # Quitter
+            print("Au revoir!")
+            break
+            
         else:
-            print(f"Format de document non supporté: {type(doc)}")
-    
-    # Insérer les documents dans l'espace vectoriel
-    vector_store = upsert_documents(splits, index_name, embeddings, namespace)
-    
-    return vector_store, namespace
+            print("Choix non valide. Veuillez entrer un nombre entre 1 et 4.")
 
-# Exemple d'utilisation du système avec plusieurs matières
-def demo_rag_multi_matieres():
-    """
-    Démontre l'utilisation du système RAG avec plusieurs matières.
-    """
-    # Initialiser Pinecone
-    pc, index_name, spec = initialize_pinecone()
-    
-    # Configurer le modèle d'embedding
-    embeddings = setup_embeddings()
-    
-    # Créer ou récupérer l'index
-    index = create_or_get_index(pc, index_name, embeddings, spec)
-    
-    # Documents pour la matière SYD (exemple)
-    docs_syd = [
-        "## Concepts fondamentaux en SYD\n\nLes systèmes distribués sont caractérisés par leur capacité à fonctionner sur plusieurs nœuds interconnectés...",
-        "## Synchronisation dans les systèmes distribués\n\nLa synchronisation est un défi majeur dans les systèmes distribués en raison des délais de communication variables..."
-    ]
-    
-    # Documents pour la matière BD (exemple)
-    docs_bd = [
-        "## Normalisation des bases de données\n\nLa normalisation est un processus de conception qui vise à minimiser la redondance et à améliorer l'intégrité des données...",
-        "## Transactions et ACID\n\nLes propriétés ACID garantissent la fiabilité des transactions dans les systèmes de gestion de bases de données..."
-    ]
-    
-    # Initialiser les matières
-    store_syd, ns_syd = initialiser_matiere(pc, index_name, embeddings, "SYD", docs_syd)
-    store_bd, ns_bd = initialiser_matiere(pc, index_name, embeddings, "BD", docs_bd)
-    
-    # Attendre que l'indexation soit terminée
-    time.sleep(5)
-    
-    # Interroger chaque matière
-    print("\n=== Questions pour SYD ===")
-    interroger_matiere(
-        vector_store=store_syd, 
-        matiere="SYD", 
-        query="Quels sont les défis de la synchronisation?",
-        index_name=index_name,
-        embeddings=embeddings
-    )
-    
-    print("\n=== Questions pour BD ===")
-    interroger_matiere(
-        vector_store=store_bd, 
-        matiere="BD", 
-        query="Expliquez les propriétés ACID",
-        index_name=index_name,
-        embeddings=embeddings
-    )
-    
-    # Générer une question de réflexion
-    print("\n=== Génération de question de réflexion pour SYD ===")
-    question = generer_question_reflexion(store_syd, "SYD", "synchronisation", index_name, embeddings)
-    print(f"Question générée: {question}")
-
-# Exécuter la fonction principale si le script est exécuté directement
 if __name__ == "__main__":
-    # Choisir quelle démonstration exécuter
-    # main()  # Démonstration standard avec WonderVector5000
-    demo_rag_multi_matieres()  # Démonstration avec plusieurs matières
-    # main()  # Par défaut, exécuter la démo standard
+    main() 
