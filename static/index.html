@@ -67,6 +67,24 @@
             max-height: 400px;
             overflow-y: auto;
         }
+        .log-container {
+            background-color: #2b2b2b;
+            color: #f0f0f0;
+            font-family: monospace;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+        .log-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #3498db;
+        }
         .spinner {
             border: 4px solid rgba(0, 0, 0, 0.1);
             width: 36px;
@@ -147,6 +165,10 @@
             <button id="btn-update-matiere">Mettre à jour l'index</button>
             <div class="spinner" id="spinner-update"></div>
             <div id="update-result" class="result" style="display: none;"></div>
+            <div id="update-logs" class="log-container" style="display: none;">
+                <div class="log-title">Logs de mise à jour :</div>
+                <div id="logs-content"></div>
+            </div>
         </div>
     </div>
     
@@ -289,14 +311,18 @@
             const matiere = document.getElementById('update-matiere').value;
             const updateResult = document.getElementById('update-result');
             const spinnerUpdate = document.getElementById('spinner-update');
+            const updateLogs = document.getElementById('update-logs');
+            const logsContent = document.getElementById('logs-content');
             
             if (!matiere) {
                 updateResult.textContent = 'Veuillez sélectionner une matière.';
                 updateResult.style.display = 'block';
+                updateLogs.style.display = 'none';
                 return;
             }
             
             updateResult.style.display = 'none';
+            updateLogs.style.display = 'none';
             spinnerUpdate.style.display = 'block';
             
             try {
@@ -311,6 +337,12 @@
                 const data = await response.json();
                 updateResult.textContent = data.message;
                 updateResult.style.display = 'block';
+                
+                // Afficher les logs s'ils sont disponibles
+                if (data.data && data.data.logs) {
+                    logsContent.textContent = data.data.logs;
+                    updateLogs.style.display = 'block';
+                }
             } catch (error) {
                 updateResult.textContent = `Erreur: ${error.message}`;
                 updateResult.style.display = 'block';

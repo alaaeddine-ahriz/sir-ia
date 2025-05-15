@@ -5,7 +5,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import uvicorn
+import io
+import sys
 from datetime import datetime
+from contextlib import redirect_stdout, redirect_stderr
 
 # Import functionality from main.py
 try:
@@ -71,6 +74,26 @@ class ApiResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
     timestamp: str = datetime.now().isoformat()
 
+# Capture les logs d'une fonction
+def capture_logs(func, *args, **kwargs):
+    # Capturer la sortie standard et les erreurs
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    
+    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        result = func(*args, **kwargs)
+    
+    # Récupérer les logs
+    stdout_logs = stdout_buffer.getvalue()
+    stderr_logs = stderr_buffer.getvalue()
+    
+    # Combiner les logs
+    logs = stdout_logs
+    if stderr_logs:
+        logs += "\n--- ERREURS ---\n" + stderr_logs
+    
+    return result, logs
+
 # Serve the frontend
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
@@ -116,20 +139,29 @@ async def update_matiere(request: UpdateRequest):
     if not os.path.exists(os.path.join(COURS_DIR, matiere)):
         raise HTTPException(status_code=404, detail=f"Matière '{matiere}' non trouvée")
     
-    # Mettre à jour la matière
+    # Mettre à jour la matière et capturer les logs
     try:
-        updated = mettre_a_jour_matiere(app.pc, app.index_name, app.embeddings, matiere)
+        updated, logs = capture_logs(mettre_a_jour_matiere, app.pc, app.index_name, app.embeddings, matiere)
+        
         if updated:
             return {
                 "success": True,
                 "message": f"Matière {matiere} mise à jour avec succès",
-                "data": {"matiere": matiere, "updated": True}
+                "data": {
+                    "matiere": matiere, 
+                    "updated": True,
+                    "logs": logs
+                }
             }
         else:
             return {
                 "success": True,
                 "message": f"Aucune mise à jour nécessaire pour la matière {matiere}",
-                "data": {"matiere": matiere, "updated": False}
+                "data": {
+                    "matiere": matiere, 
+                    "updated": False,
+                    "logs": logs
+                }
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur lors de la mise à jour: {str(e)}")
