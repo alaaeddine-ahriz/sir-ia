@@ -17,6 +17,7 @@ try:
         mettre_a_jour_matiere,
         interroger_matiere,
         generer_question_reflexion,
+        evaluer_reponse_etudiant,
         initialize_pinecone,
         setup_embeddings,
         create_or_get_index,
@@ -67,6 +68,12 @@ class ReflectionQuestionRequest(BaseModel):
     
 class UpdateRequest(BaseModel):
     matiere: str
+
+class EvaluationRequest(BaseModel):
+    matiere: str
+    question: str
+    student_response: str
+    save_output: bool = True
 
 class ApiResponse(BaseModel):
     success: bool
@@ -251,6 +258,44 @@ async def generate_reflection_question(request: ReflectionQuestionRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur lors de la génération de la question: {str(e)}")
+
+@app.post("/evaluation/response", response_model=ApiResponse)
+async def evaluate_student_response(request: EvaluationRequest):
+    """Évaluer la réponse d'un étudiant à une question"""
+    matiere = request.matiere.upper()
+    
+    # Vérifier si la matière existe
+    if not os.path.exists(os.path.join(COURS_DIR, matiere)):
+        raise HTTPException(status_code=404, detail=f"Matière '{matiere}' non trouvée")
+    
+    try:
+        # Capturer les logs et exécuter l'évaluation
+        response, logs = capture_logs(
+            evaluer_reponse_etudiant,
+            app.index_name,
+            app.embeddings,
+            matiere,
+            request.question,
+            request.student_response,
+            output_format="json",
+            save_output=request.save_output
+        )
+        
+        # Extraire les données d'évaluation (déjà en format JSON)
+        import json
+        evaluation_data = json.loads(response["answer"])
+        
+        return {
+            "success": True,
+            "message": "Évaluation générée avec succès",
+            "data": {
+                "evaluation": evaluation_data,
+                "matiere": matiere,
+                "logs": logs
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'évaluation: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

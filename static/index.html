@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Le Rhino</title>
+    <title>Le Rhino - Système RAG pour cours</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -133,18 +133,84 @@
             background-color: #f0f8ff;
             border-radius: 4px;
         }
+        .evaluation-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 20px;
+            background-color: #f9f9f9;
+        }
+        .evaluation-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .evaluation-score {
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            background-color: #2c3e50;
+            padding: 10px 15px;
+            border-radius: 5px;
+        }
+        .evaluation-points {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .evaluation-points-column {
+            flex: 1;
+            padding: 10px;
+        }
+        .points-strong {
+            background-color: #e6f7e6;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .points-improve {
+            background-color: #f7e6e6;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .point-item {
+            margin-bottom: 8px;
+            padding-left: 20px;
+            position: relative;
+        }
+        .point-item:before {
+            content: "•";
+            position: absolute;
+            left: 5px;
+        }
+        .model-answer {
+            background-color: #f0f8ff;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+            font-style: italic;
+        }
+        .personal-advice {
+            background-color: #fff8e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 15px;
+            border-left: 4px solid #f1c40f;
+        }
     </style>
 </head>
 <body>
     <header>
         <h1>Le Rhino</h1>
-        <p>Système de génération de questions basé sur RAG pour vos cours</p>
+        <p>Système de génération de questions et d'évaluation basé sur RAG pour vos cours</p>
     </header>
     
     <div class="tabs">
         <div class="tab active" data-tab="tab-matieres">Matières</div>
         <div class="tab" data-tab="tab-question">Poser une question</div>
-        <div class="tab" data-tab="tab-reflection">Générer une question de réflexion</div>
+        <div class="tab" data-tab="tab-reflection">Générer une question</div>
+        <div class="tab" data-tab="tab-evaluation">Évaluer une réponse</div>
     </div>
     
     <div id="tab-matieres" class="tab-content active">
@@ -223,6 +289,64 @@
             <div id="reflection-result" class="result" style="display: none;"></div>
         </div>
     </div>
+    
+    <div id="tab-evaluation" class="tab-content">
+        <div class="section">
+            <h2>Évaluer la réponse d'un étudiant</h2>
+            <div class="form-group">
+                <label for="evaluation-matiere">Matière:</label>
+                <select id="evaluation-matiere"></select>
+            </div>
+            <div class="form-group">
+                <label for="evaluation-question">Question posée:</label>
+                <textarea id="evaluation-question" rows="2" placeholder="Entrez la question posée à l'étudiant..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="evaluation-response">Réponse de l'étudiant:</label>
+                <textarea id="evaluation-response" rows="6" placeholder="Copiez ici la réponse de l'étudiant à évaluer..."></textarea>
+            </div>
+            <button id="btn-evaluate-response">Évaluer la réponse</button>
+            <div class="spinner" id="spinner-evaluation"></div>
+            
+            <div id="evaluation-result" class="evaluation-card" style="display: none;">
+                <div class="evaluation-header">
+                    <h3>Résultat de l'évaluation</h3>
+                    <div class="evaluation-score" id="evaluation-score">0/100</div>
+                </div>
+                
+                <div class="evaluation-points">
+                    <div class="evaluation-points-column points-strong">
+                        <h4>Points forts</h4>
+                        <div id="evaluation-strong-points"></div>
+                    </div>
+                    <div class="evaluation-points-column points-improve">
+                        <h4>Points à améliorer</h4>
+                        <div id="evaluation-improve-points"></div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h4>Réponse modèle</h4>
+                    <div id="evaluation-model-answer" class="model-answer"></div>
+                </div>
+                
+                <div>
+                    <h4>Justification de la note</h4>
+                    <div id="evaluation-justification" class="result"></div>
+                </div>
+                
+                <div class="personal-advice">
+                    <h4>Conseil personnalisé</h4>
+                    <div id="evaluation-advice"></div>
+                </div>
+            </div>
+            
+            <div id="evaluation-logs" class="log-container" style="display: none;">
+                <div class="log-title">Logs d'évaluation :</div>
+                <div id="evaluation-logs-content"></div>
+            </div>
+        </div>
+    </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -253,6 +377,7 @@
             document.getElementById('btn-update-matiere').addEventListener('click', updateMatiere);
             document.getElementById('btn-ask-question').addEventListener('click', askQuestion);
             document.getElementById('btn-generate-reflection').addEventListener('click', generateReflection);
+            document.getElementById('btn-evaluate-response').addEventListener('click', evaluateResponse);
         });
         
         // Fonction pour charger la liste des matières
@@ -261,6 +386,7 @@
             const matieresSelect = document.getElementById('update-matiere');
             const questionMatiere = document.getElementById('question-matiere');
             const reflectionMatiere = document.getElementById('reflection-matiere');
+            const evaluationMatiere = document.getElementById('evaluation-matiere');
             const matieresListDiv = document.getElementById('matieres-list');
             
             spinnerMatieres.style.display = 'block';
@@ -286,7 +412,7 @@
                         matieresListDiv.appendChild(ul);
                         
                         // Remplir les sélecteurs de matières
-                        [matieresSelect, questionMatiere, reflectionMatiere].forEach(select => {
+                        [matieresSelect, questionMatiere, reflectionMatiere, evaluationMatiere].forEach(select => {
                             select.innerHTML = '';
                             matieres.forEach(matiere => {
                                 const option = document.createElement('option');
@@ -476,6 +602,101 @@
                 reflectionResult.style.display = 'block';
             } finally {
                 spinnerReflection.style.display = 'none';
+            }
+        }
+        
+        // Fonction pour évaluer une réponse d'étudiant
+        async function evaluateResponse() {
+            const matiere = document.getElementById('evaluation-matiere').value;
+            const question = document.getElementById('evaluation-question').value;
+            const studentResponse = document.getElementById('evaluation-response').value;
+            const spinnerEvaluation = document.getElementById('spinner-evaluation');
+            const evaluationResult = document.getElementById('evaluation-result');
+            const evaluationLogs = document.getElementById('evaluation-logs');
+            const evaluationLogsContent = document.getElementById('evaluation-logs-content');
+            
+            // Éléments d'affichage du résultat
+            const scoreElement = document.getElementById('evaluation-score');
+            const strongPointsElement = document.getElementById('evaluation-strong-points');
+            const improvePointsElement = document.getElementById('evaluation-improve-points');
+            const modelAnswerElement = document.getElementById('evaluation-model-answer');
+            const justificationElement = document.getElementById('evaluation-justification');
+            const adviceElement = document.getElementById('evaluation-advice');
+            
+            if (!matiere || !question || !studentResponse) {
+                alert('Veuillez remplir tous les champs (matière, question et réponse).');
+                return;
+            }
+            
+            // Cacher les résultats précédents et afficher le spinner
+            evaluationResult.style.display = 'none';
+            evaluationLogs.style.display = 'none';
+            spinnerEvaluation.style.display = 'block';
+            
+            try {
+                const response = await fetch('/evaluation/response', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        matiere,
+                        question,
+                        student_response: studentResponse,
+                        save_output: true
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.data.evaluation) {
+                    const evaluation = data.data.evaluation;
+                    
+                    // Afficher le score
+                    scoreElement.textContent = `${evaluation.evaluation.note}/100`;
+                    
+                    // Afficher les points forts
+                    strongPointsElement.innerHTML = '';
+                    evaluation.evaluation.points_forts.forEach(point => {
+                        const pointElement = document.createElement('div');
+                        pointElement.className = 'point-item';
+                        pointElement.textContent = point;
+                        strongPointsElement.appendChild(pointElement);
+                    });
+                    
+                    // Afficher les points à améliorer
+                    improvePointsElement.innerHTML = '';
+                    evaluation.evaluation.points_amelioration.forEach(point => {
+                        const pointElement = document.createElement('div');
+                        pointElement.className = 'point-item';
+                        pointElement.textContent = point;
+                        improvePointsElement.appendChild(pointElement);
+                    });
+                    
+                    // Afficher la réponse modèle
+                    modelAnswerElement.textContent = evaluation.evaluation.reponse_modele;
+                    
+                    // Afficher la justification
+                    justificationElement.textContent = evaluation.evaluation.justification_note;
+                    
+                    // Afficher le conseil personnalisé
+                    adviceElement.textContent = evaluation.evaluation.conseil_personnalise;
+                    
+                    // Afficher le résultat
+                    evaluationResult.style.display = 'block';
+                    
+                    // Afficher les logs s'ils sont disponibles
+                    if (data.data.logs) {
+                        evaluationLogsContent.textContent = data.data.logs;
+                        evaluationLogs.style.display = 'block';
+                    }
+                } else {
+                    alert(`Erreur: ${data.message || 'Impossible d\'évaluer la réponse.'}`);
+                }
+            } catch (error) {
+                alert(`Erreur: ${error.message}`);
+            } finally {
+                spinnerEvaluation.style.display = 'none';
             }
         }
     </script>

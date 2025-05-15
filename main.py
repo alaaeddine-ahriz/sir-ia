@@ -1033,6 +1033,78 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         """
         return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR).partial(matiere=matiere)
 
+def creer_prompt_evaluateur(matiere, output_format="json"):
+    """
+    Crée un prompt personnalisé pour l'évaluateur d'une réponse d'étudiant.
+    
+    Args:
+        matiere (str): Identifiant de la matière
+        output_format (str): Format de sortie (uniquement "json" supporté)
+    
+    Returns:
+        ChatPromptTemplate: Template de prompt pour l'évaluateur
+    """
+    TEMPLATE_EVALUATEUR = """
+    Vous êtes un examinateur académique automatisé spécialisé dans la matière {matiere}. 
+    Votre rôle est d'évaluer la réponse d'un étudiant à une question de réflexion, en vous basant strictement sur le contenu du cours.
+
+    Question posée: {question}
+    
+    Réponse de l'étudiant: {student_response}
+    
+    Contexte du cours (utilisez ces extraits comme référence pour évaluer la pertinence et l'exactitude des connaissances):
+    {context}
+    
+    Procédez de façon rigoureuse, pédagogique et structurée selon les étapes suivantes:
+    
+    1. Évaluez la réponse en considérant:
+       - Pertinence des idées: Les arguments répondent-ils à la question?
+       - Qualité de l'argumentation: Les idées sont-elles développées et logiques?
+       - Maîtrise des connaissances: L'étudiant utilise-t-il correctement les concepts du cours?
+       - Originalité et pensée critique: La réponse montre-t-elle une réflexion personnelle?
+       - Clarté et structure: L'expression est-elle compréhensible et organisée?
+    
+    2. Rédigez une réponse modèle concise mais complète
+    
+    3. Identifiez 3 points forts et 3 points à améliorer
+    
+    4. Attribuez une note sur 100 et justifiez-la
+    
+    5. Proposez un conseil personnalisé pour amélioration
+    
+    Votre réponse DOIT être structurée au format JSON suivant:
+    
+    ```json
+    {{
+        "evaluation": {{
+            "note": 75,
+            "points_forts": [
+                "Point fort 1",
+                "Point fort 2",
+                "Point fort 3"
+            ],
+            "points_amelioration": [
+                "Point à améliorer 1",
+                "Point à améliorer 2",
+                "Point à améliorer 3"
+            ],
+            "reponse_modele": "Texte de la réponse modèle...",
+            "justification_note": "Explication concise de la notation...",
+            "conseil_personnalise": "Un conseil adapté pour progresser..."
+        }},
+        "metadonnees": {{
+            "matiere": "{matiere}",
+            "concepts_identifies": ["concept1", "concept2", "concept3"]
+        }}
+    }}
+    ```
+    
+    Assurez-vous que votre évaluation est juste, constructive et basée uniquement sur les extraits du cours fournis.
+    Ne répondez qu'avec le format JSON demandé, sans aucun texte avant ou après.
+    """
+    
+    return ChatPromptTemplate.from_template(TEMPLATE_EVALUATEUR).partial(matiere=matiere)
+
 # -----------------------------------------
 # Fonctions d'interrogation
 # -----------------------------------------
@@ -1206,6 +1278,120 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, out
     
     return result["answer"]
 
+def evaluer_reponse_etudiant(index_name, embeddings, matiere, question, student_response, output_format="json", save_output=True):
+    """
+    Évalue la réponse d'un étudiant à une question de réflexion,
+    en se basant sur le contenu des cours pour la matière spécifique.
+    
+    Args:
+        index_name (str): Nom de l'index Pinecone
+        embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière (ex: "SYD", "BD")
+        question (str): Question de réflexion posée
+        student_response (str): Réponse de l'étudiant à évaluer
+        output_format (str): Format de sortie (uniquement "json" supporté)
+        save_output (bool): Indique si la sortie JSON doit être sauvegardée
+        
+    Returns:
+        dict: Résultat de l'évaluation avec la note, les points forts/faibles, etc.
+    """
+    # Valider le format de sortie (seul json est supporté pour cette fonction)
+    if output_format != "json":
+        print("Avertissement: Seul le format 'json' est supporté pour l'évaluation. Utilisation du format json.")
+        output_format = "json"
+    
+    # Créer le prompt d'évaluateur pour cette matière
+    evaluateur_prompt = creer_prompt_evaluateur(matiere, output_format)
+    
+    # Créer un système RAG avec le prompt d'évaluateur
+    retrieval_chain = setup_rag_system(
+        index_name=index_name, 
+        embeddings=embeddings,
+        matiere=matiere, 
+        custom_prompt=evaluateur_prompt,
+        output_format=output_format
+    )
+    
+    print(f"\n\n--- Évaluation pour {matiere}, question: '{question}' ---")
+    
+    # Exécuter l'évaluation
+    response = retrieval_chain.invoke({
+        "input": "Évaluer la réponse de l'étudiant", 
+        "question": question,
+        "student_response": student_response
+    })
+    
+    # Dossier de sortie pour la session
+    output_dir = None
+    if save_output:
+        output_dir = creer_dossier_sortie()
+    
+    # Traiter la réponse JSON
+    try:
+        import json
+        import re
+        
+        # Extraire le JSON de la réponse
+        json_answer = response['answer']
+        
+        # Rechercher le JSON entre les délimiteurs ```json et ```
+        json_pattern = r"```(?:json)?(.*?)```"
+        match = re.search(json_pattern, json_answer, re.DOTALL)
+        
+        if match:
+            # Extraire le contenu JSON
+            json_str = match.group(1).strip()
+            evaluation_json = json.loads(json_str)
+        else:
+            # Essayer de charger directement la réponse comme JSON
+            json_str = json_answer.strip()
+            evaluation_json = json.loads(json_str)
+        
+        # Ajouter les sources à la réponse JSON
+        sources = []
+        for i, doc in enumerate(response["context"]):
+            source_entry = {
+                "document": i + 1,
+                "source": doc.metadata.get('source', 'Source inconnue')
+            }
+            
+            # Ajouter la section si elle existe
+            if "Header 2" in doc.metadata:
+                source_entry["section"] = doc.metadata["Header 2"]
+            elif "Header 3" in doc.metadata:
+                source_entry["section"] = doc.metadata["Header 3"]
+            
+            sources.append(source_entry)
+        
+        # Ajouter les sources aux métadonnées
+        if "metadonnees" not in evaluation_json:
+            evaluation_json["metadonnees"] = {}
+        evaluation_json["metadonnees"]["sources"] = sources
+        
+        # Ajouter des métadonnées supplémentaires
+        evaluation_json["metadonnees"]["question"] = question
+        evaluation_json["metadonnees"]["date_evaluation"] = datetime.now().isoformat()
+        
+        # Mettre à jour la réponse
+        formatted_json = json.dumps(evaluation_json, ensure_ascii=False, indent=2)
+        
+        # Stocker le JSON complet dans la réponse
+        response['answer'] = formatted_json
+        
+        # Sauvegarder le résultat si demandé
+        if save_output:
+            prefix = "evaluation"
+            sauvegarder_json(formatted_json, prefix, matiere, output_dir)
+        
+        print("\nÉvaluation (format JSON):")
+        print(formatted_json)
+        
+    except Exception as e:
+        print(f"Erreur lors du traitement de la réponse JSON: {e}")
+        print(f"Contenu de la réponse: {response['answer'][:100]}...")
+    
+    return response
+
 # -----------------------------------------
 # Fonction principale et utilitaires
 # -----------------------------------------
@@ -1322,9 +1508,10 @@ def main():
         print("3. Générer une question de réflexion (JSON)")
         print("4. Poser une question sur une matière")
         print("5. Poser une question (réponse JSON)")
-        print("6. Quitter")
+        print("6. Évaluer la réponse d'un étudiant")
+        print("7. Quitter")
         
-        choix = input("Votre choix (1-6): ")
+        choix = input("Votre choix (1-7): ")
         
         if choix == "1":
             # Mettre à jour une matière
@@ -1412,14 +1599,55 @@ def main():
                 interroger_matiere(index_name, embeddings, matiere, question, output_format="json", save_output=True)
             except Exception as e:
                 print(f"Erreur lors de la recherche: {e}")
-            
+                
         elif choix == "6":
+            # Évaluer la réponse d'un étudiant
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            question = input("Entrez la question posée à l'étudiant: ")
+            print("\nEntrez la réponse de l'étudiant (terminez par une ligne contenant uniquement 'FIN'):")
+            
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == "FIN":
+                    break
+                lines.append(line)
+            
+            student_response = "\n".join(lines)
+            
+            if not student_response.strip():
+                print("La réponse de l'étudiant ne peut pas être vide.")
+                continue
+                
+            try:
+                evaluation = evaluer_reponse_etudiant(
+                    index_name, 
+                    embeddings, 
+                    matiere, 
+                    question, 
+                    student_response, 
+                    output_format="json", 
+                    save_output=True
+                )
+                print("\nÉvaluation terminée et sauvegardée.")
+            except Exception as e:
+                print(f"Erreur lors de l'évaluation: {e}")
+            
+        elif choix == "7":
             # Quitter
             print("Au revoir!")
             break
             
         else:
-            print("Choix non valide. Veuillez entrer un nombre entre 1 et 6.")
+            print("Choix non valide. Veuillez entrer un nombre entre 1 et 7.")
 
 if __name__ == "__main__":
     main() 
