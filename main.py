@@ -13,6 +13,8 @@ import warnings
 import glob
 import hashlib
 import json
+import tempfile
+import io
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -26,6 +28,22 @@ os.environ["LANGCHAIN_TRACING"] = "false"
 os.environ["LANGCHAIN_API_KEY"] = "not-needed"
 os.environ["LANGCHAIN_PROJECT"] = "not-needed"
 warnings.filterwarnings("ignore", category=Warning, module="langsmith")
+
+# Imports pour les différents formats de documents
+try:
+    # PDF
+    import pdfplumber
+    # Word (docx)
+    import docx
+    # PowerPoint (pptx)
+    from pptx import Presentation
+    # OpenDocument (odt, odp)
+    import odf.opendocument
+    from odf.text import P
+    from odf.teletype import extractText
+except ImportError:
+    print("Avertissement: Certaines bibliothèques de traitement de documents ne sont pas installées.")
+    print("Exécutez 'pip install pdfplumber python-docx python-pptx odfpy' pour une prise en charge complète.")
 
 # Imports pour le découpage de texte
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
@@ -66,7 +84,7 @@ def initialiser_structure_dossiers():
         print(f"Dossier principal des cours créé: {COURS_DIR}")
     
     # Liste des matières (à adapter selon vos besoins)
-    matieres = ["SYD"]
+    matieres = ["SYD","TCP"]
     
     for matiere in matieres:
         matiere_dir = os.path.join(COURS_DIR, matiere)
@@ -87,7 +105,8 @@ def initialiser_structure_dossiers():
 
 def lire_fichiers_matiere(matiere):
     """
-    Lit tous les fichiers de cours pour une matière donnée.
+    Lit tous les fichiers de cours pour une matière donnée,
+    avec prise en charge de formats variés (md, txt, pdf, docx, pptx, etc.).
     
     Args:
         matiere (str): Identifiant de la matière (ex: "SYD", "BD")
@@ -105,7 +124,7 @@ def lire_fichiers_matiere(matiere):
     documents = []
     
     # Extensions supportées
-    extensions = ["*.md", "*.txt"]
+    extensions = ["*.md", "*.txt", "*.pdf", "*.docx", "*.pptx", "*.doc", "*.odt", "*.odp"]
     
     # Parcourir tous les fichiers avec les extensions supportées
     for ext in extensions:
@@ -118,8 +137,13 @@ def lire_fichiers_matiere(matiere):
                 # Calculer le hash du fichier pour suivre les modifications
                 file_hash = calculer_hash_fichier(file_path)
                 
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
+                # Extraire le contenu selon le type de fichier
+                file_extension = os.path.splitext(file_path)[1].lower()
+                content = extraire_contenu_fichier(file_path, file_extension)
+                
+                if not content or content.strip() == "":
+                    print(f"Avertissement: Le fichier {file_path} semble vide après extraction.")
+                    continue
                 
                 # Métadonnées du document
                 relative_path = os.path.relpath(file_path, COURS_DIR)
@@ -127,7 +151,7 @@ def lire_fichiers_matiere(matiere):
                     "source": relative_path,
                     "matiere": matiere,
                     "filename": os.path.basename(file_path),
-                    "filetype": os.path.splitext(file_path)[1],
+                    "filetype": file_extension,
                     "file_hash": file_hash,
                     "updated_at": datetime.now().isoformat()
                 }
@@ -157,6 +181,115 @@ def calculer_hash_fichier(file_path):
             hash_md5.update(chunk)
             
     return hash_md5.hexdigest()
+
+def extraire_contenu_fichier(file_path, file_extension):
+    """
+    Extrait le contenu textuel d'un fichier selon son format.
+    
+    Args:
+        file_path (str): Chemin vers le fichier
+        file_extension (str): Extension du fichier (avec le point)
+        
+    Returns:
+        str: Contenu textuel du fichier
+    """
+    try:
+        # Fichiers texte et markdown
+        if file_extension in ['.txt', '.md']:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        
+        # Fichiers PDF
+        elif file_extension == '.pdf':
+            text = ""
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text() or ""
+                        text += page_text + "\n\n"
+                return text
+            except Exception as e:
+                print(f"Erreur avec pdfplumber: {e}. Tentative alternative...")
+                # Si pdfplumber échoue, essayer une méthode alternative si disponible
+                import PyPDF2
+                with open(file_path, 'rb') as file:
+                    reader = PyPDF2.PdfReader(file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text() + "\n\n"
+                return text
+        
+        # Fichiers Word (DOCX)
+        elif file_extension == '.docx':
+            text = ""
+            doc = docx.Document(file_path)
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+                # Tenter d'identifier les titres potentiels basés sur le style
+                if para.style.name.startswith('Heading'):
+                    heading_level = int(para.style.name[-1]) if para.style.name[-1].isdigit() else 2
+                    prefix = '#' * heading_level
+                    text = text[:-1] + f"\n{prefix} {para.text}\n"
+            return text
+        
+        # Fichiers PowerPoint (PPTX)
+        elif file_extension == '.pptx':
+            text = ""
+            pres = Presentation(file_path)
+            for i, slide in enumerate(pres.slides):
+                text += f"## Slide {i+1}\n\n"
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        text += shape.text + "\n"
+                text += "\n"
+            return text
+        
+        # Fichiers OpenDocument Text (ODT)
+        elif file_extension == '.odt':
+            textdoc = odf.opendocument.load(file_path)
+            allparas = textdoc.getElementsByType(P)
+            text = ""
+            for para in allparas:
+                text += extractText(para) + "\n"
+            return text
+        
+        # Fichiers OpenDocument Presentation (ODP)
+        elif file_extension == '.odp':
+            doc = odf.opendocument.load(file_path)
+            text = ""
+            slide_num = 1
+            
+            # Récupérer tous les éléments de texte
+            for para in doc.getElementsByType(P):
+                content = extractText(para)
+                if content.strip():
+                    if "Slide" not in text[-20:] and len(text) > 0:
+                        text += f"\n## Slide {slide_num}\n\n"
+                        slide_num += 1
+                    text += content + "\n"
+            
+            return text
+        
+        # Fichiers DOC (ancien format Word)
+        elif file_extension == '.doc':
+            # Essayer d'utiliser textract s'il est installé
+            try:
+                import textract
+                text = textract.process(file_path).decode('utf-8')
+                return text
+            except ImportError:
+                print(f"Erreur: textract non installé pour lire les fichiers .doc")
+                print(f"Installez-le avec 'pip install textract'")
+                return f"[Contenu du fichier .doc non extrait: {os.path.basename(file_path)}]"
+        
+        # Format non pris en charge
+        else:
+            print(f"Format de fichier non pris en charge: {file_extension}")
+            return f"[Format non pris en charge: {file_extension}]"
+    
+    except Exception as e:
+        print(f"Erreur lors de l'extraction du contenu de {file_path}: {e}")
+        return f"[Erreur d'extraction: {str(e)}]"
 
 def charger_metadata():
     """
@@ -194,7 +327,7 @@ def sauvegarder_metadata(metadata):
 def split_document(document):
     """
     Divise un document en sections.
-    Utilise des stratégies différentes selon le type de fichier.
+    Utilise des stratégies différentes selon le type de fichier et la présence d'en-têtes.
     
     Args:
         document (dict): Document avec contenu et métadonnées
@@ -205,8 +338,11 @@ def split_document(document):
     content = document["content"]
     metadata = document["metadata"]
     
-    # Stratégie pour les fichiers markdown: découpage par en-têtes
-    if metadata["filetype"] == ".md":
+    # Vérifier la présence d'en-têtes markdown (##, ###) dans le contenu
+    has_markdown_headers = '##' in content
+    
+    # Si le document est un markdown ou contient des en-têtes, utiliser la méthode par en-têtes
+    if metadata["filetype"] == ".md" or has_markdown_headers:
         headers_to_split_on = [
             ("##", "Header 2"),
             ("###", "Header 3")
@@ -234,9 +370,9 @@ def split_document(document):
             # Fallback sur le découpage par caractères
             return split_by_characters(content, metadata)
     
-    # Pour les autres types de fichiers: découpage par caractères
+    # Pour les autres types de fichiers ou documents sans en-têtes: découpage par caractères et paragraphes
     else:
-        return split_by_characters(content, metadata)
+        return split_by_paragraphs(content, metadata)
 
 def split_by_characters(content, metadata):
     """
@@ -252,6 +388,29 @@ def split_by_characters(content, metadata):
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
+        length_function=len,
+    )
+    
+    docs = text_splitter.create_documents([content], [metadata])
+    return docs
+
+def split_by_paragraphs(content, metadata):
+    """
+    Divise un document en chunks par paragraphes,
+    plus adapté pour les documents non structurés.
+    
+    Args:
+        content (str): Contenu du document
+        metadata (dict): Métadonnées du document
+        
+    Returns:
+        list: Liste des sections avec leurs métadonnées
+    """
+    # Découpage par paragraphes avec chevauchement
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=250,
+        separators=["\n\n", "\n", ". ", " ", ""],
         length_function=len,
     )
     
