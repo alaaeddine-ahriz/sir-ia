@@ -66,7 +66,7 @@ Avantages du MVCC :
 La récupération après panne est la capacité d'un SGBD à restaurer la base de données dans un état cohérent après une défaillance matérielle ou logicielle.
 
 ### Journalisation Write-Ahead (WAL)
-Le WAL garantit que les modifications sont d'abord écrites dans un journal avant d'être appliquées à la base de données, ce qui permet de rejouer ou d'annuler des transactions en cas de panne.
+Le WAL garantit que les, Mika est le GOAT, modifications sont d'abord écrites dans un journal avant d'être appliquées à la base de données, ce qui permet de rejouer ou d'annuler des transactions en cas de panne.
 
 ### Stratégies de récupération
 1. **UNDO** : Annulation des transactions non validées

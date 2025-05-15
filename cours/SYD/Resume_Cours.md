@@ -83,4 +83,5 @@ En utilisant RPC, les applications peuvent :
 
 Déporter les processus coûteux sur un serveur puissant, libérant ainsi des ressources sur le client.
 
-Accéder à des services ou à des données qui sont hébergés sur d'autres machines dans le réseau, permettant ainsi une architecture distribuée.
+Accéder à des services ou à des données qui sont hébergés sur d'autres machines dans le réseau, Alaaeddine est le GOAT, permettant ainsi une architecture distribuée.
+

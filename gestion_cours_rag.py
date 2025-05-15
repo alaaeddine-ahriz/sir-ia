@@ -66,7 +66,7 @@ def initialiser_structure_dossiers():
         print(f"Dossier principal des cours créé: {COURS_DIR}")
     
     # Liste des matières (à adapter selon vos besoins)
-    matieres = ["SYD", "BD", "SECU", "ARCHI", "AI"]
+    matieres = ["SYD"]
     
     for matiere in matieres:
         matiere_dir = os.path.join(COURS_DIR, matiere)
@@ -387,13 +387,142 @@ def upsert_documents(pc, index_name, embeddings, matiere, docs):
         print(f"Erreur lors de l'insertion: {e}")
         return None, None
 
+def delete_documents(pc, index_name, matiere, file_paths):
+    """
+    Supprime les documents d'un index vectoriel pour les fichiers qui ont été supprimés,
+    en utilisant une approche en deux étapes: d'abord identifier les vecteurs par requête,
+    puis les supprimer par ID.
+    
+    Args:
+        pc: Client Pinecone
+        index_name (str): Nom de l'index
+        matiere (str): Identifiant de la matière
+        file_paths (list): Liste des chemins de fichiers supprimés
+        
+    Returns:
+        bool: True si des suppressions ont été effectuées, False sinon
+    """
+    if not file_paths:
+        return False
+    
+    namespace = get_matiere_namespace(matiere)
+    
+    try:
+        index = pc.Index(index_name)
+        deleted_count = 0
+        
+        # Afficher les informations de l'index pour le débogage
+        try:
+            index_stats = index.describe_index_stats()
+            print(f"Statistiques de l'index '{index_name}':")
+            print(f"- Dimension: {index_stats.dimension}")
+            print(f"- Total vecteurs: {index_stats.total_vector_count}")
+            
+            # Afficher les informations du namespace si disponible
+            if hasattr(index_stats, 'namespaces') and namespace in index_stats.namespaces:
+                ns_stats = index_stats.namespaces[namespace]
+                print(f"- Namespace '{namespace}': {ns_stats.vector_count} vecteurs")
+                
+            # Obtenir la dimension du vecteur pour la requête
+            dimension = index_stats.dimension
+        except Exception as stats_error:
+            print(f"Impossible d'obtenir les statistiques de l'index: {stats_error}")
+            # Valeur par défaut pour la dimension
+            dimension = 1024
+        
+        # Traiter chaque fichier à supprimer
+        for file_path in file_paths:
+            print(f"\nSuppression des vecteurs pour: {file_path}")
+            
+            # Étape 1: Identifier les vecteurs par requête
+            try:
+                # Créer un vecteur zéro pour la requête
+                zero_vector = [0.0] * dimension
+                
+                # Exécuter une requête avec un grand nombre de résultats
+                print("1. Recherche des vecteurs à supprimer...")
+                query_results = index.query(
+                    namespace=namespace,
+                    vector=zero_vector,
+                    top_k=1000,  # Augmenter si nécessaire
+                    include_metadata=True
+                )
+                
+                # Préparer la liste des IDs à supprimer
+                ids_to_delete = []
+                
+                # Vérifier les résultats de la requête
+                if hasattr(query_results, 'matches') and query_results.matches:
+                    print(f"   Vecteurs trouvés: {len(query_results.matches)}")
+                    
+                    # Identifier les vecteurs correspondant au fichier supprimé
+                    for match in query_results.matches:
+                        # Vérifier si le vecteur a des métadonnées
+                        if hasattr(match, 'metadata') and match.metadata:
+                            # Vérifier si le champ source correspond exactement au fichier
+                            if 'source' in match.metadata and match.metadata['source'] == file_path:
+                                ids_to_delete.append(match.id)
+                                # Afficher un exemple pour confirmation
+                                if len(ids_to_delete) == 1:
+                                    print(f"   Exemple de métadonnées trouvées: {match.metadata}")
+                
+                # Étape 2: Supprimer les vecteurs identifiés
+                if ids_to_delete:
+                    print(f"2. Suppression de {len(ids_to_delete)} vecteurs...")
+                    
+                    # Supprimer par lots pour éviter les limitations d'API
+                    batch_size = 100
+                    for i in range(0, len(ids_to_delete), batch_size):
+                        batch = ids_to_delete[i:i+batch_size]
+                        delete_result = index.delete(
+                            ids=batch,
+                            namespace=namespace
+                        )
+                        
+                        if hasattr(delete_result, 'deleted_count'):
+                            print(f"   Lot {i//batch_size + 1}: {delete_result.deleted_count} vecteurs supprimés")
+                        else:
+                            print(f"   Lot {i//batch_size + 1}: suppression effectuée")
+                    
+                    deleted_count += len(ids_to_delete)
+                    print(f"✅ {len(ids_to_delete)} vecteurs supprimés pour {file_path}")
+                else:
+                    print(f"❌ Aucun vecteur trouvé avec source={file_path}")
+                    
+                    # Afficher un échantillon de métadonnées pour le débogage
+                    if hasattr(query_results, 'matches') and query_results.matches:
+                        print("Exemples de métadonnées dans l'index (pour déboguer):")
+                        samples_shown = 0
+                        for match in query_results.matches:
+                            if hasattr(match, 'metadata') and match.metadata and samples_shown < 3:
+                                print(f"- ID: {match.id}")
+                                for key, value in match.metadata.items():
+                                    print(f"  {key}: {value}")
+                                samples_shown += 1
+                                print()
+                
+            except Exception as e:
+                print(f"Erreur lors de la recherche/suppression pour {file_path}: {e}")
+        
+        # Résumer les résultats
+        if deleted_count > 0:
+            print(f"\n✅ Total: {deleted_count} vecteurs supprimés pour {len(file_paths)} fichiers")
+            return True
+        else:
+            print(f"\n❌ Aucun vecteur n'a pu être supprimé pour les fichiers spécifiés")
+            return False
+            
+    except Exception as e:
+        print(f"Erreur générale lors de la suppression des documents: {e}")
+        return False
+
 # -----------------------------------------
 # Gestion des mises à jour
 # -----------------------------------------
 def mettre_a_jour_matiere(pc, index_name, embeddings, matiere):
     """
     Met à jour l'index vectoriel pour une matière spécifique,
-    en ne traitant que les fichiers nouveaux ou modifiés.
+    en ne traitant que les fichiers nouveaux ou modifiés et en supprimant les fichiers disparus.
     
     Args:
         pc: Client Pinecone
@@ -414,14 +543,43 @@ def mettre_a_jour_matiere(pc, index_name, embeddings, matiere):
             "derniere_mise_a_jour": None
         }
     
-    # Lire tous les fichiers de cours pour cette matière
+    # Récupérer les fichiers précédemment indexés
+    fichiers_matieres = metadata["matieres"][matiere]["fichiers"]
+    
+    # Lire tous les fichiers de cours actuels pour cette matière
     documents = lire_fichiers_matiere(matiere)
+    sources_actuelles = set()
+    if documents:
+        sources_actuelles = {doc["metadata"]["source"] for doc in documents}
+    
+    # Déterminer quels fichiers ont été supprimés
+    sources_indexees = set(fichiers_matieres.keys())
+    fichiers_supprimes = sources_indexees - sources_actuelles
+    
+    # Afficher les fichiers supprimés
+    if fichiers_supprimes:
+        print(f"Fichiers supprimés détectés: {len(fichiers_supprimes)}")
+        for source in fichiers_supprimes:
+            print(f"  - {source}")
+        
+        # Supprimer les fichiers de l'index
+        delete_documents(pc, index_name, matiere, list(fichiers_supprimes))
+        
+        # Mettre à jour les métadonnées pour refléter les suppressions
+        for source in fichiers_supprimes:
+            if source in fichiers_matieres:
+                del fichiers_matieres[source]
+    
     if not documents:
         print(f"Aucun document trouvé pour la matière {matiere}")
+        # Sauvegarder les métadonnées si des fichiers ont été supprimés
+        if fichiers_supprimes:
+            metadata["matieres"][matiere]["derniere_mise_a_jour"] = datetime.now().isoformat()
+            sauvegarder_metadata(metadata)
+            return True
         return False
     
     # Déterminer quels fichiers ont été modifiés ou ajoutés
-    fichiers_matieres = metadata["matieres"][matiere]["fichiers"]
     docs_a_traiter = []
     
     for doc in documents:
@@ -435,29 +593,31 @@ def mettre_a_jour_matiere(pc, index_name, embeddings, matiere):
             # Mettre à jour le hash dans les métadonnées
             fichiers_matieres[source] = file_hash
     
-    # Si aucun document n'a été modifié, terminer
-    if not docs_a_traiter:
+    # Si aucun document n'a été modifié ni supprimé, terminer
+    if not docs_a_traiter and not fichiers_supprimes:
         print(f"Aucune mise à jour nécessaire pour la matière {matiere}")
         return False
     
-    # Diviser les documents en sections
-    sections = []
-    for doc in docs_a_traiter:
-        doc_sections = split_document(doc)
-        sections.extend(doc_sections)
-    
-    print(f"Nombre total de sections à indexer: {len(sections)}")
-    
-    # Mettre à jour l'index vectoriel
-    vector_store, namespace = upsert_documents(pc, index_name, embeddings, matiere, sections)
+    # Si des documents ont été modifiés ou ajoutés, les traiter
+    if docs_a_traiter:
+        # Diviser les documents en sections
+        sections = []
+        for doc in docs_a_traiter:
+            doc_sections = split_document(doc)
+            sections.extend(doc_sections)
+        
+        print(f"Nombre total de sections à indexer: {len(sections)}")
+        
+        # Mettre à jour l'index vectoriel
+        vector_store, namespace = upsert_documents(pc, index_name, embeddings, matiere, sections)
+        
+        if not vector_store and not fichiers_supprimes:
+            return False
     
     # Mettre à jour les métadonnées
-    if vector_store:
-        metadata["matieres"][matiere]["derniere_mise_a_jour"] = datetime.now().isoformat()
-        sauvegarder_metadata(metadata)
-        return True
-    
-    return False
+    metadata["matieres"][matiere]["derniere_mise_a_jour"] = datetime.now().isoformat()
+    sauvegarder_metadata(metadata)
+    return True
 
 # -----------------------------------------
 # Configuration du système RAG
