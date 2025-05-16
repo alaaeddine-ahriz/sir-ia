@@ -53,3 +53,4 @@ mkdir -p static
 echo "Starting the application..."
 echo "Access the web interface at: http://localhost:8000"
 python app.py 
+

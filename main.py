@@ -140,6 +140,11 @@ def lire_fichiers_matiere(matiere):
     # Extensions supportées
     extensions = ["*.md", "*.txt", "*.pdf", "*.docx", "*.pptx", "*.doc", "*.odt", "*.odp"]
     
+    # Vérifier si un dossier d'examens existe pour cette matière
+    examens_dir = os.path.join(matiere_dir, "examens")
+    exam_documents = []
+    has_exam_folder = os.path.exists(examens_dir) and os.path.isdir(examens_dir)
+    
     # Parcourir tous les fichiers avec les extensions supportées
     for ext in extensions:
         for file_path in glob.glob(os.path.join(matiere_dir, "**", ext), recursive=True):
@@ -170,13 +175,22 @@ def lire_fichiers_matiere(matiere):
                     "updated_at": datetime.now().isoformat()
                 }
                 
-                documents.append({"content": content, "metadata": metadata})
-                print(f"Fichier lu: {relative_path}")
+                # Vérifier si le document est dans le dossier d'examens
+                is_exam = "examens" in relative_path
+                if is_exam:
+                    metadata["is_exam"] = True
+                    metadata["document_type"] = "exam"
+                    exam_documents.append({"content": content, "metadata": metadata})
+                else:
+                    documents.append({"content": content, "metadata": metadata})
+                
+                print(f"Fichier lu: {relative_path}" + (" (examen)" if is_exam else ""))
                 
             except Exception as e:
                 print(f"Erreur lors de la lecture du fichier {file_path}: {e}")
     
-    return documents
+    # Combiner les documents, plaçant les examens en premier pour leur donner plus de poids
+    return exam_documents + documents
 
 def calculer_hash_fichier(file_path):
     """
@@ -938,20 +952,23 @@ def creer_prompt_json(matiere):
     
     Répondez à cette question: {input}
     
-    Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
+    Votre réponse DOIT être au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
     
     ```json
     {{
         "réponse": "La réponse complète à la question",
-        "concepts_clés": ["concept1", "concept2", "concept3"],
         "niveau_confiance": 0.95
     }}
     ```
     
+    CHAMPS OPTIONNELS:
+    - Si pertinent, vous pouvez ajouter un champ "concepts_clés": ["concept1", "concept2", "concept3"]
+    - Ce champ est OPTIONNEL et ne doit être inclus que si vous pouvez identifier clairement des concepts clés
+    
     IMPORTANT:
     - Ne mentionnez pas et n'ajoutez pas de sources dans votre réponse
-    - Concentrez-vous uniquement sur la réponse et les concepts clés
-    - N'incluez aucun autre champ que ceux spécifiés ci-dessus
+    - Concentrez-vous principalement sur la réponse
+    - N'incluez que les champs spécifiés ci-dessus
     
     Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
     """
@@ -973,14 +990,22 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         TEMPLATE_TUTEUR_JSON = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une question de réflexion de niveau débutant sur le concept demandé, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une question de réflexion sur le concept demandé, en vous basant strictement sur les extraits suivants:
 
         {context}
+
+        IMPORTANT CONCERNANT LES EXAMENS:
+        Certains des documents fournis peuvent être des fichiers d'examens (identifiés par "is_exam": true dans les métadonnées).
+        Si ces documents sont présents parmi les sources, vous devez:
+        1. Observer attentivement le style, le niveau et le type de questions posées par les professeurs dans ces examens
+        2. Formuler votre question dans un style similaire, visant le même niveau de difficulté et de réflexion
+        3. S'inspirer de la structure et de la formulation des questions d'examen tout en restant pertinent au concept demandé
 
         La question doit :
         1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
         2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
         3. Favoriser une réponse argumentée plutôt qu'une simple définition.
+        4. Ressembler au style et au niveau des questions d'examen si des documents d'examen font partie des sources.
 
         Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
 
@@ -994,7 +1019,8 @@ def creer_prompt_tuteur(matiere, output_format="text"):
                 "Élément 1 attendu dans la réponse",
                 "Élément 2 attendu dans la réponse",
                 "Élément 3 attendu dans la réponse"
-            ]
+            ],
+            "basé_sur_examen": true // ou false, selon si des documents d'examen ont influencé la formulation
         }}
         ```
 
@@ -1007,19 +1033,28 @@ def creer_prompt_tuteur(matiere, output_format="text"):
 
         Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
         """
+        
         return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR_JSON).partial(matiere=matiere)
     else:
         TEMPLATE_TUTEUR = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une seule question de réflexion de niveau débutant, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une seule question de réflexion, en vous basant strictement sur les extraits suivants:
 
         {context}
+
+        IMPORTANT CONCERNANT LES EXAMENS:
+        Certains des documents fournis peuvent être des fichiers d'examens (identifiés par "is_exam": true dans les métadonnées).
+        Si ces documents sont présents parmi les sources, vous devez:
+        1. Observer attentivement le style, le niveau et le type de questions posées par les professeurs dans ces examens
+        2. Formuler votre question dans un style similaire, visant le même niveau de difficulté et de réflexion
+        3. S'inspirer de la structure et de la formulation des questions d'examen tout en restant pertinent au concept demandé
 
         La question doit :
         1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
         2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
         3. Favoriser une réponse argumentée plutôt qu'une simple définition.
+        4. Ressembler au style et au niveau des questions d'examen si des documents d'examen font partie des sources.
 
         # Instructions
 
@@ -1032,6 +1067,85 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         Votre question: 
         """
         return ChatPromptTemplate.from_template(TEMPLATE_TUTEUR).partial(matiere=matiere)
+
+def creer_prompt_evaluateur(matiere, output_format="json"):
+    """
+    Crée un prompt personnalisé pour l'évaluateur d'une réponse d'étudiant.
+    
+    Args:
+        matiere (str): Identifiant de la matière
+        output_format (str): Format de sortie (uniquement "json" supporté)
+    
+    Returns:
+        ChatPromptTemplate: Template de prompt pour l'évaluateur
+    """
+    TEMPLATE_EVALUATEUR = """
+    Vous êtes un examinateur académique automatisé spécialisé dans la matière {matiere}. 
+    Votre rôle est d'évaluer la réponse d'un étudiant à une question de réflexion, en vous basant strictement sur le contenu du cours.
+
+    Question posée: {question}
+    
+    Réponse de l'étudiant: {student_response}
+    
+    Contexte du cours (utilisez ces extraits comme référence pour évaluer la pertinence et l'exactitude des connaissances):
+    {context}
+    
+    IMPORTANT CONCERNANT LES EXAMENS:
+    Certains des documents fournis peuvent être des fichiers d'examens (identifiés par "is_exam": true dans les métadonnées).
+    Si ces documents sont présents parmi les sources, vous devez:
+    1. Observer attentivement le style et les critères d'évaluation utilisés par les professeurs dans ces examens
+    2. Appliquer des standards d'évaluation similaires à ceux qu'un professeur utiliserait pour cette matière
+    3. Tenir compte du niveau de difficulté et de précision attendu dans les examens officiels
+    
+    Procédez de façon rigoureuse, pédagogique et structurée selon les étapes suivantes:
+    
+    1. Évaluez la réponse en considérant:
+       - Pertinence des idées: Les arguments répondent-ils à la question?
+       - Qualité de l'argumentation: Les idées sont-elles développées et logiques?
+       - Maîtrise des connaissances: L'étudiant utilise-t-il correctement les concepts du cours?
+       - Originalité et pensée critique: La réponse montre-t-elle une réflexion personnelle?
+       - Clarté et structure: L'expression est-elle compréhensible et organisée?
+    
+    2. Rédigez une réponse modèle concise mais complète
+    
+    3. Identifiez 3 points forts et 3 points à améliorer
+    
+    4. Attribuez une note sur 100 et justifiez-la
+    
+    5. Proposez un conseil personnalisé pour amélioration
+    
+    Votre évaluation DOIT être retournée strictement au format JSON suivant:
+    
+    ```json
+    {
+        "note": 85,
+        "points_forts": [
+            "Point fort 1",
+            "Point fort 2",
+            "Point fort 3"
+        ],
+        "points_ameliorer": [
+            "Point à améliorer 1",
+            "Point à améliorer 2",
+            "Point à améliorer 3"
+        ],
+        "reponse_modele": "Une réponse modèle concise mais complète",
+        "justification_note": "Explication détaillée de la note attribuée",
+        "conseil_personnalise": "Un conseil spécifique pour aider l'étudiant à progresser",
+        "basé_sur_examen": true
+    }
+    ```
+    
+    IMPORTANT:
+    - Le champ "basé_sur_examen" doit être true si des documents d'examen ont influencé l'évaluation, false sinon
+    - Ne mentionnez pas et n'ajoutez pas de sources dans votre réponse
+    - N'incluez aucun autre champ que ceux spécifiés ci-dessus
+    - Soyez rigoureux mais juste dans votre évaluation
+    
+    Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
+    """
+    
+    return ChatPromptTemplate.from_template(TEMPLATE_EVALUATEUR).partial(matiere=matiere)
 
 # -----------------------------------------
 # Fonctions d'interrogation
@@ -1065,13 +1179,13 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
     if save_output and output_format == "json":
         output_dir = creer_dossier_sortie()
     
-    # Si format JSON demandé, ajouter les sources aux résultats
+    # Formater la réponse si le format de sortie est JSON
     if output_format == "json":
         try:
             import json
             import re
             
-            # Extraire le JSON de la réponse (qui peut contenir d'autres textes)
+            # Extraire le JSON de la réponse
             json_answer = response['answer']
             
             # Rechercher le JSON entre les délimiteurs ```json et ```
@@ -1084,16 +1198,30 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
                 response_json = json.loads(json_str)
             else:
                 # Essayer de charger directement la réponse comme JSON
-                # Nettoyer la réponse si nécessaire (retirer les caractères non-JSON)
                 json_str = json_answer.strip()
                 response_json = json.loads(json_str)
             
-            # Créer la section sources à partir des documents réellement utilisés
+            # Vérifier si des documents d'examen sont présents dans le contexte
+            has_exam_docs = any(
+                doc.metadata.get("is_exam", False) for doc in response.get("context", [])
+            )
+            
+            # Ajouter l'information sur l'utilisation d'examens si nécessaire
+            if "basé_sur_examen" not in response_json:
+                response_json["basé_sur_examen"] = has_exam_docs
+            
+            # S'assurer que le champ "concepts_clés" existe (même vide) pour la cohérence des réponses
+            if "concepts_clés" not in response_json:
+                # Champ facultatif, nous ne l'ajoutons pas s'il n'est pas présent
+                pass
+            
+            # Ajouter les sources à la réponse
             sources = []
             for i, doc in enumerate(response["context"]):
                 source_entry = {
                     "document": i + 1,
-                    "source": doc.metadata.get('source', 'Source inconnue')
+                    "source": doc.metadata.get('source', 'Source inconnue'),
+                    "is_exam": doc.metadata.get('is_exam', False)
                 }
                 
                 # Ajouter la section si elle existe
@@ -1132,50 +1260,19 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
             
             print("\nRéponse (format JSON):")
             print(formatted_json)
-        except Exception as e:
-            print(f"Erreur lors de l'ajout des sources à la réponse JSON: {e}")
-            print(f"Contenu de la réponse: {response['answer'][:100]}...")
             
-            # On va quand même essayer de conserver la réponse JSON originale
-            import re
-            json_pattern = r"```(?:json)?(.*?)```"
-            match = re.search(json_pattern, response['answer'], re.DOTALL)
-            if match:
-                json_str = match.group(1).strip()
-                print("\nRéponse (format JSON - sans sources ajoutées):")
-                print(f"```json\n{json_str}\n```")
-                
-                # Sauvegarder quand même si demandé
-                if save_output:
-                    try:
-                        prefix = "reponse_partielle"
-                        sauvegarder_json(json_str, prefix, matiere, output_dir)
-                    except Exception as save_error:
-                        print(f"Erreur lors de la sauvegarde du JSON: {save_error}")
-            else:
-                print("\nRéponse (format JSON - sans sources ajoutées):")
-                print(response['answer'])
-    else:
-        print(f"\nRéponse: {response['answer']}")
+        except Exception as e:
+            print(f"Erreur lors du traitement de la réponse JSON: {e}")
+            print(f"Contenu de la réponse: {response['answer'][:100]}...")
     
-    # Afficher les documents sources
-    print("\nDocuments sources:")
-    for i, doc in enumerate(response["context"]):
-        print(f"\nDocument {i+1}:")
-        source = doc.metadata.get('source', 'Source inconnue')
-        print(f"Source: {source}")
-        header = ""
-        if "Header 2" in doc.metadata:
-            header = doc.metadata["Header 2"]
-        elif "Header 3" in doc.metadata:
-            header = doc.metadata["Header 3"]
-        if header:
-            print(f"Section: {header}")
-        print(f"Contenu: {doc.page_content[:150]}...")
+    else:
+        # Pour le format texte, afficher simplement la réponse
+        print("\nRéponse:")
+        print(response["answer"])
     
     return response
 
-def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, output_format="text", save_output=True):
+def generer_question_reflexion(index_name, embeddings, matiere, concept_cle=None, output_format="text", save_output=True):
     """
     Génère une question de réflexion sur un concept clé dans une matière spécifique.
     
@@ -1183,7 +1280,7 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, out
         index_name (str): Nom de l'index Pinecone
         embeddings: Modèle d'embedding
         matiere (str): Identifiant de la matière (ex: "SYD", "BD")
-        concept_cle (str): Concept sur lequel générer une question
+        concept_cle (str, optional): Concept sur lequel générer une question. Si None ou vide, une question générale sera générée.
         output_format (str): Format de sortie ("text" ou "json")
         save_output (bool): Indique si la sortie JSON doit être sauvegardée
         
@@ -1193,18 +1290,186 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, out
     # Créer le prompt tuteur pour cette matière
     tuteur_prompt = creer_prompt_tuteur(matiere, output_format)
     
+    # Construire la requête en fonction de si concept_cle est fourni ou non
+    if concept_cle and concept_cle.strip():
+        query = f"Générer une question de réflexion sur le concept: {concept_cle}"
+    else:
+        query = f"Générer une question de réflexion générale sur la matière"
+    
     # Interroger la matière avec ce prompt
     result = interroger_matiere(
         index_name=index_name, 
         embeddings=embeddings,
         matiere=matiere, 
-        query=f"Générer une question de réflexion sur le concept: {concept_cle}",
+        query=query,
         custom_prompt=tuteur_prompt,
         output_format=output_format,
         save_output=save_output
     )
     
+    # Si le format est JSON, vérifier si des examens ont été utilisés pour la génération
+    if output_format == "json" and isinstance(result.get("context"), list):
+        # Vérifier si des documents d'examen sont présents dans le contexte
+        has_exam_docs = any(
+            doc.metadata.get("is_exam", False) for doc in result.get("context", [])
+        )
+        
+        # Ajouter cette information à la réponse JSON si elle n'est pas déjà présente
+        try:
+            import json
+            import re
+            
+            # Extraire le JSON de la réponse
+            json_answer = result['answer']
+            
+            # Rechercher le JSON entre les délimiteurs ```json et ```
+            json_pattern = r"```(?:json)?(.*?)```"
+            match = re.search(json_pattern, json_answer, re.DOTALL)
+            
+            if match:
+                # Extraire le contenu JSON
+                json_str = match.group(1).strip()
+                response_json = json.loads(json_str)
+            else:
+                # Essayer de charger directement la réponse comme JSON
+                json_str = json_answer.strip()
+                response_json = json.loads(json_str)
+            
+            # Si le champ "basé_sur_examen" n'est pas déjà défini, l'ajouter
+            if "basé_sur_examen" not in response_json:
+                response_json["basé_sur_examen"] = has_exam_docs
+                
+                # Mettre à jour la réponse JSON
+                formatted_json = json.dumps(response_json, ensure_ascii=False, indent=2)
+                result['answer'] = formatted_json
+                
+        except Exception as e:
+            print(f"Erreur lors du traitement du JSON pour les examens: {e}")
+    
     return result["answer"]
+
+def evaluer_reponse_etudiant(index_name, embeddings, matiere, question, student_response, output_format="json", save_output=True):
+    """
+    Évalue la réponse d'un étudiant à une question de réflexion,
+    en se basant sur le contenu des cours pour la matière spécifique.
+    
+    Args:
+        index_name (str): Nom de l'index Pinecone
+        embeddings: Modèle d'embedding
+        matiere (str): Identifiant de la matière (ex: "SYD", "BD")
+        question (str): Question de réflexion posée
+        student_response (str): Réponse de l'étudiant à évaluer
+        output_format (str): Format de sortie (uniquement "json" supporté)
+        save_output (bool): Indique si la sortie JSON doit être sauvegardée
+        
+    Returns:
+        dict: Résultat de l'évaluation avec la note, les points forts/faibles, etc.
+    """
+    # Valider le format de sortie (seul json est supporté pour cette fonction)
+    if output_format != "json":
+        print("Avertissement: Seul le format 'json' est supporté pour l'évaluation. Utilisation du format json.")
+        output_format = "json"
+    
+    # Créer le prompt d'évaluateur pour cette matière
+    evaluateur_prompt = creer_prompt_evaluateur(matiere, output_format)
+    
+    # Créer un système RAG avec le prompt d'évaluateur
+    retrieval_chain = setup_rag_system(
+        index_name=index_name, 
+        embeddings=embeddings,
+        matiere=matiere, 
+        custom_prompt=evaluateur_prompt,
+        output_format=output_format
+    )
+    
+    print(f"\n\n--- Évaluation pour {matiere}, question: '{question}' ---")
+    
+    # Exécuter l'évaluation
+    response = retrieval_chain.invoke({
+        "input": "Évaluer la réponse de l'étudiant", 
+        "question": question,
+        "student_response": student_response
+    })
+    
+    # Dossier de sortie pour la session
+    output_dir = None
+    if save_output:
+        output_dir = creer_dossier_sortie()
+    
+    # Traiter la réponse JSON
+    try:
+        import json
+        import re
+        
+        # Extraire le JSON de la réponse
+        json_answer = response['answer']
+        
+        # Rechercher le JSON entre les délimiteurs ```json et ```
+        json_pattern = r"```(?:json)?(.*?)```"
+        match = re.search(json_pattern, json_answer, re.DOTALL)
+        
+        if match:
+            # Extraire le contenu JSON
+            json_str = match.group(1).strip()
+            evaluation_json = json.loads(json_str)
+        else:
+            # Essayer de charger directement la réponse comme JSON
+            json_str = json_answer.strip()
+            evaluation_json = json.loads(json_str)
+        
+        # Vérifier si des documents d'examen sont présents dans le contexte
+        has_exam_docs = any(
+            doc.metadata.get("is_exam", False) for doc in response.get("context", [])
+        )
+        
+        # Si le champ "basé_sur_examen" n'est pas déjà défini, l'ajouter
+        if "basé_sur_examen" not in evaluation_json:
+            evaluation_json["basé_sur_examen"] = has_exam_docs
+        
+        # Ajouter les sources à la réponse JSON
+        sources = []
+        for i, doc in enumerate(response["context"]):
+            source_entry = {
+                "document": i + 1,
+                "source": doc.metadata.get('source', 'Source inconnue'),
+                "is_exam": doc.metadata.get('is_exam', False)
+            }
+            
+            # Ajouter la section si elle existe
+            if "Header 2" in doc.metadata:
+                source_entry["section"] = doc.metadata["Header 2"]
+            elif "Header 3" in doc.metadata:
+                source_entry["section"] = doc.metadata["Header 3"]
+            
+            sources.append(source_entry)
+        
+        # Ajouter les sources aux métadonnées
+        if "metadonnees" not in evaluation_json:
+            evaluation_json["metadonnees"] = {}
+        evaluation_json["metadonnees"]["sources"] = sources
+        
+        # Ajouter des métadonnées supplémentaires
+        evaluation_json["metadonnees"]["question"] = question
+        evaluation_json["metadonnees"]["date_evaluation"] = datetime.now().isoformat()
+        
+        # Mettre à jour la réponse
+        formatted_json = json.dumps(evaluation_json, ensure_ascii=False, indent=2)
+        
+        # Stocker le JSON complet dans la réponse
+        response['answer'] = formatted_json
+        
+        # Sauvegarder le résultat si demandé
+        if save_output:
+            prefix = "evaluation"
+            sauvegarder_json(formatted_json, prefix, matiere, output_dir)
+        
+        print("\nRésultat de l'évaluation (format JSON):")
+        print(formatted_json)
+    
+    except Exception as e:
+        print(f"Erreur lors du traitement du JSON d'évaluation: {e}")
+    
+    return response
 
 # -----------------------------------------
 # Fonction principale et utilitaires
@@ -1322,9 +1587,10 @@ def main():
         print("3. Générer une question de réflexion (JSON)")
         print("4. Poser une question sur une matière")
         print("5. Poser une question (réponse JSON)")
-        print("6. Quitter")
+        print("6. Évaluer la réponse d'un étudiant")
+        print("7. Quitter")
         
-        choix = input("Votre choix (1-6): ")
+        choix = input("Votre choix (1-7): ")
         
         if choix == "1":
             # Mettre à jour une matière
@@ -1412,14 +1678,55 @@ def main():
                 interroger_matiere(index_name, embeddings, matiere, question, output_format="json", save_output=True)
             except Exception as e:
                 print(f"Erreur lors de la recherche: {e}")
-            
+                
         elif choix == "6":
+            # Évaluer la réponse d'un étudiant
+            if not matieres:
+                print("Aucune matière disponible.")
+                continue
+                
+            matiere = input(f"Entrez le nom de la matière ({', '.join(matieres)}): ").upper()
+            if matiere not in matieres:
+                print(f"Matière '{matiere}' non trouvée.")
+                continue
+                
+            question = input("Entrez la question posée à l'étudiant: ")
+            print("\nEntrez la réponse de l'étudiant (terminez par une ligne contenant uniquement 'FIN'):")
+            
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == "FIN":
+                    break
+                lines.append(line)
+            
+            student_response = "\n".join(lines)
+            
+            if not student_response.strip():
+                print("La réponse de l'étudiant ne peut pas être vide.")
+                continue
+                
+            try:
+                evaluation = evaluer_reponse_etudiant(
+                    index_name, 
+                    embeddings, 
+                    matiere, 
+                    question, 
+                    student_response, 
+                    output_format="json", 
+                    save_output=True
+                )
+                print("\nÉvaluation terminée et sauvegardée.")
+            except Exception as e:
+                print(f"Erreur lors de l'évaluation: {e}")
+            
+        elif choix == "7":
             # Quitter
             print("Au revoir!")
             break
             
         else:
-            print("Choix non valide. Veuillez entrer un nombre entre 1 et 6.")
+            print("Choix non valide. Veuillez entrer un nombre entre 1 et 7.")
 
 if __name__ == "__main__":
     main() 
