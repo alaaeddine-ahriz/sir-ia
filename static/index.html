@@ -274,7 +274,7 @@
                 <select id="reflection-matiere"></select>
             </div>
             <div class="form-group">
-                <label for="reflection-concept">Concept clé:</label>
+                <label for="reflection-concept">Concept clé (optionnel):</label>
                 <input type="text" id="reflection-concept" placeholder="Ex: virtualisation, réseaux, sécurité...">
             </div>
             <div class="form-group">
@@ -565,8 +565,8 @@
             const reflectionResult = document.getElementById('reflection-result');
             const spinnerReflection = document.getElementById('spinner-reflection');
             
-            if (!matiere || !concept) {
-                reflectionResult.textContent = 'Veuillez sélectionner une matière et entrer un concept clé.';
+            if (!matiere) {
+                reflectionResult.textContent = 'Veuillez sélectionner une matière.';
                 reflectionResult.style.display = 'block';
                 return;
             }

@@ -62,7 +62,7 @@ class QuestionRequest(BaseModel):
 
 class ReflectionQuestionRequest(BaseModel):
     matiere: str
-    concept_cle: str
+    concept_cle: Optional[str] = ""
     output_format: str = "text"
     save_output: bool = True
     

@@ -952,20 +952,23 @@ def creer_prompt_json(matiere):
     
     Répondez à cette question: {input}
     
-    Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
+    Votre réponse DOIT être au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
     
     ```json
     {{
         "réponse": "La réponse complète à la question",
-        "concepts_clés": ["concept1", "concept2", "concept3"],
         "niveau_confiance": 0.95
     }}
     ```
     
+    CHAMPS OPTIONNELS:
+    - Si pertinent, vous pouvez ajouter un champ "concepts_clés": ["concept1", "concept2", "concept3"]
+    - Ce champ est OPTIONNEL et ne doit être inclus que si vous pouvez identifier clairement des concepts clés
+    
     IMPORTANT:
     - Ne mentionnez pas et n'ajoutez pas de sources dans votre réponse
-    - Concentrez-vous uniquement sur la réponse et les concepts clés
-    - N'incluez aucun autre champ que ceux spécifiés ci-dessus
+    - Concentrez-vous principalement sur la réponse
+    - N'incluez que les champs spécifiés ci-dessus
     
     Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
     """
@@ -1207,6 +1210,11 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
             if "basé_sur_examen" not in response_json:
                 response_json["basé_sur_examen"] = has_exam_docs
             
+            # S'assurer que le champ "concepts_clés" existe (même vide) pour la cohérence des réponses
+            if "concepts_clés" not in response_json:
+                # Champ facultatif, nous ne l'ajoutons pas s'il n'est pas présent
+                pass
+            
             # Ajouter les sources à la réponse
             sources = []
             for i, doc in enumerate(response["context"]):
@@ -1264,7 +1272,7 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
     
     return response
 
-def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, output_format="text", save_output=True):
+def generer_question_reflexion(index_name, embeddings, matiere, concept_cle=None, output_format="text", save_output=True):
     """
     Génère une question de réflexion sur un concept clé dans une matière spécifique.
     
@@ -1272,7 +1280,7 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, out
         index_name (str): Nom de l'index Pinecone
         embeddings: Modèle d'embedding
         matiere (str): Identifiant de la matière (ex: "SYD", "BD")
-        concept_cle (str): Concept sur lequel générer une question
+        concept_cle (str, optional): Concept sur lequel générer une question. Si None ou vide, une question générale sera générée.
         output_format (str): Format de sortie ("text" ou "json")
         save_output (bool): Indique si la sortie JSON doit être sauvegardée
         
@@ -1282,12 +1290,18 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle, out
     # Créer le prompt tuteur pour cette matière
     tuteur_prompt = creer_prompt_tuteur(matiere, output_format)
     
+    # Construire la requête en fonction de si concept_cle est fourni ou non
+    if concept_cle and concept_cle.strip():
+        query = f"Générer une question de réflexion sur le concept: {concept_cle}"
+    else:
+        query = f"Générer une question de réflexion générale sur la matière"
+    
     # Interroger la matière avec ce prompt
     result = interroger_matiere(
         index_name=index_name, 
         embeddings=embeddings,
         matiere=matiere, 
-        query=f"Générer une question de réflexion sur le concept: {concept_cle}",
+        query=query,
         custom_prompt=tuteur_prompt,
         output_format=output_format,
         save_output=save_output
