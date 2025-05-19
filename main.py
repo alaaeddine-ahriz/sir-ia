@@ -990,28 +990,33 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         TEMPLATE_TUTEUR_JSON = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une question de réflexion sur le concept demandé, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une question de réflexion originale sur le concept demandé, en vous basant strictement sur les extraits suivants:
 
         {context}
 
         IMPORTANT CONCERNANT LES EXAMENS:
         Certains des documents fournis peuvent être des fichiers d'examens (identifiés par "is_exam": true dans les métadonnées).
         Si ces documents sont présents parmi les sources, vous devez:
-        1. Observer attentivement le style, le niveau et le type de questions posées par les professeurs dans ces examens
-        2. Formuler votre question dans un style similaire, visant le même niveau de difficulté et de réflexion
-        3. S'inspirer de la structure et de la formulation des questions d'examen tout en restant pertinent au concept demandé
+        1. Analyser le style, le niveau et le type de questions posées par les professeurs dans ces examens
+        2. Comprendre la structure et la formulation typique des questions d'examen
+        3. Créer une question ORIGINALE qui suit le même style et niveau, mais qui:
+           - N'est PAS une variation ou reformulation des questions existantes
+           - Aborde un aspect différent ou complémentaire du concept
+           - Utilise un angle d'approche nouveau
+           - Reste dans le même niveau de difficulté et de réflexion
 
         La question doit :
-        1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
-        2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
-        3. Favoriser une réponse argumentée plutôt qu'une simple définition.
-        4. Ressembler au style et au niveau des questions d'examen si des documents d'examen font partie des sources.
+        1. Être ORIGINALE et non une reformulation des questions existantes
+        2. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions
+        3. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté
+        4. Favoriser une réponse argumentée plutôt qu'une simple définition
+        5. Suivre le style et le niveau des questions d'examen si des documents d'examen font partie des sources
 
         Votre réponse DOIT être strictement au format JSON suivant, SANS les sources (j'ajouterai les sources moi-même):
 
         ```json
         {{
-            "question": "La question de réflexion complète",
+            "question": "La question de réflexion originale",
             "concepts_abordés": ["concept1", "concept2", "concept3"],
             "niveau_difficulté": "avancé", // "débutant", "intermédiaire" ou "avancé"
             "compétences_visées": ["analyse critique", "synthèse", "application pratique"],
@@ -1020,7 +1025,8 @@ def creer_prompt_tuteur(matiere, output_format="text"):
                 "Élément 2 attendu dans la réponse",
                 "Élément 3 attendu dans la réponse"
             ],
-            "basé_sur_examen": true // ou false, selon si des documents d'examen ont influencé la formulation
+            "basé_sur_examen": true, // ou false, selon si des documents d'examen ont influencé le style
+            "originalité": "Explication de l'angle original choisi pour la question"
         }}
         ```
 
@@ -1030,6 +1036,7 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         - N'incluez aucun autre champ que ceux spécifiés ci-dessus
         - Les "éléments_réponse" doivent être des points clés qu'un étudiant devrait aborder dans sa réponse
         - Basez ces éléments uniquement sur le contenu des documents sources fournis
+        - La question DOIT être originale et non une reformulation des questions existantes
 
         Ne répondez qu'avec ce format JSON, sans aucun texte avant ou après.
         """
@@ -1039,30 +1046,36 @@ def creer_prompt_tuteur(matiere, output_format="text"):
         TEMPLATE_TUTEUR = """
         Vous êtes un tuteur IA spécialisé dans la matière {matiere}, disposant d'un accès direct aux documents de cours via un système de recherche sémantique (RAG).
 
-        Votre tâche est de générer une seule question de réflexion, en vous basant strictement sur les extraits suivants:
+        Votre tâche est de générer une question de réflexion originale, en vous basant strictement sur les extraits suivants:
 
         {context}
 
         IMPORTANT CONCERNANT LES EXAMENS:
         Certains des documents fournis peuvent être des fichiers d'examens (identifiés par "is_exam": true dans les métadonnées).
         Si ces documents sont présents parmi les sources, vous devez:
-        1. Observer attentivement le style, le niveau et le type de questions posées par les professeurs dans ces examens
-        2. Formuler votre question dans un style similaire, visant le même niveau de difficulté et de réflexion
-        3. S'inspirer de la structure et de la formulation des questions d'examen tout en restant pertinent au concept demandé
+        1. Analyser le style, le niveau et le type de questions posées par les professeurs dans ces examens
+        2. Comprendre la structure et la formulation typique des questions d'examen
+        3. Créer une question ORIGINALE qui suit le même style et niveau, mais qui:
+           - N'est PAS une variation ou reformulation des questions existantes
+           - Aborde un aspect différent ou complémentaire du concept
+           - Utilise un angle d'approche nouveau
+           - Reste dans le même niveau de difficulté et de réflexion
 
         La question doit :
-        1. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions.
-        2. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté.
-        3. Favoriser une réponse argumentée plutôt qu'une simple définition.
-        4. Ressembler au style et au niveau des questions d'examen si des documents d'examen font partie des sources.
+        1. Être ORIGINALE et non une reformulation des questions existantes
+        2. Solliciter l'analyse critique d'un concept ou d'une relation entre plusieurs notions
+        3. Être formulée de manière claire, concise et précise, avec un vocabulaire académique adapté
+        4. Favoriser une réponse argumentée plutôt qu'une simple définition
+        5. Suivre le style et le niveau des questions d'examen si des documents d'examen font partie des sources
 
         # Instructions
 
-        - N'utilisez que les passages extraits des documents de cours ci-dessus.
-        - Ne proposez qu'une question ouverte et directe en une ligne.
-        - N'ajoutez ni explication ni sous-questions.
-        - Les questions ne doivent pas demander d'analyse.
-        - Référez-vous strictement aux extraits listés.
+        - N'utilisez que les passages extraits des documents de cours ci-dessus
+        - Ne proposez qu'une question ouverte et directe en une ligne
+        - N'ajoutez ni explication ni sous-questions
+        - Les questions ne doivent pas demander d'analyse
+        - Référez-vous strictement aux extraits listés
+        - La question DOIT être originale et non une reformulation des questions existantes
 
         Votre question: 
         """
@@ -1112,23 +1125,23 @@ def creer_prompt_evaluateur(matiere, output_format="json"):
     
     4. Attribuez une note sur 100 et justifiez-la
     
-    5. Proposez un conseil personnalisé pour amélioration
+    5. Proposez un conseil personnalisé pour améliorer
     
     Votre évaluation DOIT être retournée strictement au format JSON suivant:
     
     ```json
     {
         "note": 85,
-        "points_forts": [
-            "Point fort 1",
-            "Point fort 2",
-            "Point fort 3"
-        ],
+            "points_forts": [
+                "Point fort 1",
+                "Point fort 2",
+                "Point fort 3"
+            ],
         "points_ameliorer": [
-            "Point à améliorer 1",
-            "Point à améliorer 2",
-            "Point à améliorer 3"
-        ],
+                "Point à améliorer 1",
+                "Point à améliorer 2",
+                "Point à améliorer 3"
+            ],
         "reponse_modele": "Une réponse modèle concise mais complète",
         "justification_note": "Explication détaillée de la note attribuée",
         "conseil_personnalise": "Un conseil spécifique pour aider l'étudiant à progresser",
@@ -1264,7 +1277,7 @@ def interroger_matiere(index_name, embeddings, matiere, query, custom_prompt=Non
         except Exception as e:
             print(f"Erreur lors du traitement de la réponse JSON: {e}")
             print(f"Contenu de la réponse: {response['answer'][:100]}...")
-    
+            
     else:
         # Pour le format texte, afficher simplement la réponse
         print("\nRéponse:")
@@ -1290,11 +1303,30 @@ def generer_question_reflexion(index_name, embeddings, matiere, concept_cle=None
     # Créer le prompt tuteur pour cette matière
     tuteur_prompt = creer_prompt_tuteur(matiere, output_format)
     
+    # Ajouter un timestamp pour assurer l'unicité de la requête
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    
     # Construire la requête en fonction de si concept_cle est fourni ou non
     if concept_cle and concept_cle.strip():
-        query = f"Générer une question de réflexion sur le concept: {concept_cle}"
+        # Varier la formulation de la requête
+        formulations = [
+            f"Générer une question de réflexion sur le concept: {concept_cle}",
+            f"Créer une question qui explore le concept: {concept_cle}",
+            f"Formuler une question qui approfondit le concept: {concept_cle}",
+            f"Proposer une question qui analyse le concept: {concept_cle}",
+            f"Élaborer une question qui examine le concept: {concept_cle}"
+        ]
+        query = f"{formulations[int(timestamp[-1]) % len(formulations)]} [timestamp: {timestamp}]"
     else:
-        query = f"Générer une question de réflexion générale sur la matière"
+        # Varier la formulation pour une question générale
+        formulations = [
+            f"Générer une question de réflexion générale sur la matière",
+            f"Créer une question qui explore un aspect important de la matière",
+            f"Formuler une question qui approfondit un concept clé de la matière",
+            f"Proposer une question qui analyse un thème central de la matière",
+            f"Élaborer une question qui examine un principe fondamental de la matière"
+        ]
+        query = f"{formulations[int(timestamp[-1]) % len(formulations)]} [timestamp: {timestamp}]"
     
     # Interroger la matière avec ce prompt
     result = interroger_matiere(
@@ -1465,7 +1497,7 @@ def evaluer_reponse_etudiant(index_name, embeddings, matiere, question, student_
         
         print("\nRésultat de l'évaluation (format JSON):")
         print(formatted_json)
-    
+        
     except Exception as e:
         print(f"Erreur lors du traitement du JSON d'évaluation: {e}")
     
