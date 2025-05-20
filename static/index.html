@@ -653,11 +653,11 @@
                     const evaluation = data.data.evaluation;
                     
                     // Afficher le score
-                    scoreElement.textContent = `${evaluation.evaluation.note}/100`;
+                    scoreElement.textContent = `${evaluation.note}/100`;
                     
                     // Afficher les points forts
                     strongPointsElement.innerHTML = '';
-                    evaluation.evaluation.points_forts.forEach(point => {
+                    evaluation.points_forts.forEach(point => {
                         const pointElement = document.createElement('div');
                         pointElement.className = 'point-item';
                         pointElement.textContent = point;
@@ -666,7 +666,7 @@
                     
                     // Afficher les points à améliorer
                     improvePointsElement.innerHTML = '';
-                    evaluation.evaluation.points_amelioration.forEach(point => {
+                    evaluation.points_ameliorer.forEach(point => {
                         const pointElement = document.createElement('div');
                         pointElement.className = 'point-item';
                         pointElement.textContent = point;
@@ -674,13 +674,13 @@
                     });
                     
                     // Afficher la réponse modèle
-                    modelAnswerElement.textContent = evaluation.evaluation.reponse_modele;
+                    modelAnswerElement.textContent = evaluation.reponse_modele;
                     
                     // Afficher la justification
-                    justificationElement.textContent = evaluation.evaluation.justification_note;
+                    justificationElement.textContent = evaluation.justification_note;
                     
                     // Afficher le conseil personnalisé
-                    adviceElement.textContent = evaluation.evaluation.conseil_personnalise;
+                    adviceElement.textContent = evaluation.conseil_personnalise;
                     
                     // Afficher le résultat
                     evaluationResult.style.display = 'block';

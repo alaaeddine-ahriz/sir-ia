@@ -1130,23 +1130,23 @@ def creer_prompt_evaluateur(matiere, output_format="json"):
     Votre évaluation DOIT être retournée strictement au format JSON suivant:
     
     ```json
-    {
+    {{
         "note": 85,
-            "points_forts": [
-                "Point fort 1",
-                "Point fort 2",
-                "Point fort 3"
-            ],
+        "points_forts": [
+            "Point fort 1",
+            "Point fort 2",
+            "Point fort 3"
+        ],
         "points_ameliorer": [
-                "Point à améliorer 1",
-                "Point à améliorer 2",
-                "Point à améliorer 3"
-            ],
+            "Point à améliorer 1",
+            "Point à améliorer 2",
+            "Point à améliorer 3"
+        ],
         "reponse_modele": "Une réponse modèle concise mais complète",
         "justification_note": "Explication détaillée de la note attribuée",
         "conseil_personnalise": "Un conseil spécifique pour aider l'étudiant à progresser",
         "basé_sur_examen": true
-    }
+    }}
     ```
     
     IMPORTANT:
@@ -1418,7 +1418,8 @@ def evaluer_reponse_etudiant(index_name, embeddings, matiere, question, student_
     
     # Exécuter l'évaluation
     response = retrieval_chain.invoke({
-        "input": "Évaluer la réponse de l'étudiant", 
+        "input": "Évaluer la réponse de l'étudiant",  # This is needed for the retrieval chain
+        "context": "",  # Will be filled by the retrieval chain
         "question": question,
         "student_response": student_response
     })
